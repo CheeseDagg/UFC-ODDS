@@ -17,6 +17,13 @@ import json, re, unicodedata, difflib
 # Hand-verified overrides for cases the heuristic can't reach on its own.
 ALIAS = {
     "javierreyesrugeles": "Javier Reyes",
+    # Abdul Rakhman Yakhyaev — fightodds.io flips this fighter's spelling
+    # between pulls (one-word "Abdulrakhman", hyphenated, "Rahman" vs "Rakhman").
+    # Pin every plausible form to the dataset's name so he never greys out.
+    "abdulrakhmanyakhyaev": "Abdul Rakhman Yakhyaev",
+    "abdulrahmanyakhyaev":  "Abdul Rakhman Yakhyaev",
+    "abdurakhmanyakhyaev":  "Abdul Rakhman Yakhyaev",
+    "abdurrahmanyakhyaev":  "Abdul Rakhman Yakhyaev",
 }
 
 
