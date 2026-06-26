@@ -27,10 +27,12 @@ jobs:
       - name: Install dependencies
         run: pip install pandas
       - name: Fetch odds + build site
-        run: python build_site.py
+        run: |
+          cd Github
+          python build_site.py
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: Github/docs
 
   deploy:
     needs: build
