@@ -73,7 +73,9 @@ def parse_event(J):
         n = fe.get("node", {}) or {}
         if n.get("isCancelled"):
             continue
-        f1n, f2n = _full_name(n.get("fighter1", {})), _full_name(n.get("fighter2", {}))
+        fr1, fr2 = n.get("fighter1", {}) or {}, n.get("fighter2", {}) or {}
+        f1n, f2n = _full_name(fr1), _full_name(fr2)
+        f1s, f2s = fr1.get("slug", ""), fr2.get("slug", "")
         if not f1n or not f2n:
             continue
         feed_best1, feed_best2 = n.get("bestOdds1"), n.get("bestOdds2")
@@ -131,6 +133,7 @@ def parse_event(J):
         key = "|".join(sorted([nm(f1n), nm(f2n)]))
         out[key] = {
             "f1": f1n, "f2": f2n,
+            "f1_slug": f1s, "f2_slug": f2s,
             "cons1": round(cons1, 4), "cons2": round(1 - cons1, 4),
             "am1": p_to_am(cons1), "am2": p_to_am(1 - cons1),
             "best1": best1, "best2": best2,
@@ -200,10 +203,13 @@ def parse_card(J):
         n = fe.get("node", {}) or {}
         if n.get("isCancelled"):
             continue
-        r, b = _full_name(n.get("fighter1", {})), _full_name(n.get("fighter2", {}))
+        fr1, fr2 = n.get("fighter1", {}) or {}, n.get("fighter2", {}) or {}
+        r, b = _full_name(fr1), _full_name(fr2)
         if not r or not b:
             continue
-        rows.append({"r": r, "b": b, "wc": _wc_of(n),
+        rows.append({"r": r, "b": b,
+                     "r_slug": fr1.get("slug", ""), "b_slug": fr2.get("slug", ""),
+                     "wc": _wc_of(n),
                      "title": _title_of(n), "seg": _seg_of(n)})
     return rows
 

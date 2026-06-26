@@ -112,6 +112,28 @@ class Reconciler:
             return name, None
         return best, self.div.get(best)
 
+    def match_pref(self, name, slug=""):
+        """Prefer the fightodds.io SLUG for matching. Slugs carry a permanent
+        numeric id and stay constant even when the feed flips a fighter's
+        display-name spelling between pulls, so matching on the slug makes a
+        fighter resolve the SAME way every build (no flicker, no greying).
+        Falls back to the display name only when the slug doesn't resolve."""
+        sn = _name_from_slug(slug)
+        if sn:
+            c, d = self.match(sn)
+            if d is not None:                       # slug resolved to a dataset fighter
+                return c, d
+        return self.match(name)
+
+
+def _name_from_slug(slug):
+    """fightodds.io slugs look like 'abdulrakhman-yakhyaev-42963' — a stable
+    stem plus a permanent id. Strip the trailing id and turn the hyphenated
+    stem into a plain name we can run through the matcher. Stable across the
+    feed's pull-to-pull spelling flips."""
+    s = re.sub(r"-\d+$", "", str(slug or "")).strip()
+    return s.replace("-", " ").strip()
+
 
 def reconcile_odds(odds, rec, keyfn):
     """Re-key + relabel an odds dict onto canonical names.
@@ -119,8 +141,8 @@ def reconcile_odds(odds, rec, keyfn):
     out, report = {}, []
     for o in odds.values():
         f1b, f2b = o["f1"], o["f2"]
-        f1, d1 = rec.match(f1b)
-        f2, d2 = rec.match(f2b)
+        f1, d1 = rec.match_pref(f1b, o.get("f1_slug", ""))
+        f2, d2 = rec.match_pref(f2b, o.get("f2_slug", ""))
         o = dict(o)
         o["f1"], o["f2"] = f1, f2
         out["|".join(sorted([keyfn(f1), keyfn(f2)]))] = o
@@ -134,8 +156,8 @@ def reconcile_card(rows, rec):
     the fighters' divisions (agree -> use it; disagree -> the more-established
     fighter's division; if neither maps -> left blank)."""
     for row in rows:
-        r1, d1 = rec.match(row["r"])
-        r2, d2 = rec.match(row["b"])
+        r1, d1 = rec.match_pref(row["r"], row.get("r_slug", ""))
+        r2, d2 = rec.match_pref(row["b"], row.get("b_slug", ""))
         row["r"], row["b"] = r1, r2
         if not row.get("wc"):
             if d1 and d2 and d1 == d2:
