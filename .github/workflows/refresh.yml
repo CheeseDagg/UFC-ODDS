@@ -1,45 +1,29 @@
-name: Refresh UFC odds
-
+name: Publish UFC site
+# Publishes the committed Github/docs as-is. No live fetch, no build step —
+# this removes the GitHub-datacenter-IP fightodds feed (which serves stale/
+# pre-swap matchups to GH's IP) from the loop entirely. Update the site by
+# committing freshly built docs (built at home from your own feed pull).
 on:
   push:
     branches: [ main ]
-  schedule:
-    - cron: '0 13 * * *'
   workflow_dispatch: {}
-
 permissions:
   contents: read
   pages: write
   id-token: write
-
 concurrency:
   group: pages
   cancel-in-progress: true
-
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: pip install pandas
-      - name: Fetch odds + build site
-        run: |
-          cd Github
-          python build_site.py
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: Github/docs
-
   deploy:
-    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: Github/docs
       - id: deployment
         uses: actions/deploy-pages@v4
