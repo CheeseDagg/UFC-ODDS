@@ -9,11 +9,19 @@ def run(*args):
     subprocess.run([PY_, *args], cwd=HERE, check=True)
 def main():
     local = "--local" in sys.argv
-    if not local:
-        run("fetch_odds.py")
     raw = HERE / "raw.json"
+    # PIN OVERRIDE: if a home-pulled fightodds_raw.json is committed, build from it
+    # and skip the live fetch entirely. This sidesteps the GitHub datacenter-IP
+    # feed degradation (stale/wrong matchups served to GH's IP). Drop the file in
+    # to pin a card; delete it to let the daily auto-refresh resume.
+    pin = HERE / "fightodds_raw.json"
+    if pin.exists():
+        print(f">> PINNED: building from committed {pin.name} (live fetch skipped).")
+        shutil.copy(pin, raw)
+    elif not local:
+        run("fetch_odds.py")
     if not raw.exists():
-        sys.exit("no raw.json (run without --local to fetch first)")
+        sys.exit("no raw.json (commit fightodds_raw.json, or run without --local to fetch)")
     (HERE / "odds").mkdir(exist_ok=True)
     (HERE / "docs").mkdir(exist_ok=True)
     J = json.load(open(raw))
