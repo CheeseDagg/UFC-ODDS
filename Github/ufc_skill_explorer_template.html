@@ -656,7 +656,20 @@ a{color:var(--blue)}
 @media(max-width:560px){.statgrid{grid-template-columns:1fr}.totrow,.tott-h{grid-template-columns:1fr 96px 1fr}}
 </style>
 </head>
-<body>
+\1<div id="freshpill" style="display:none;position:sticky;top:0;z-index:99;text-align:center;
+padding:5px 10px;font:600 12.5px system-ui;letter-spacing:.03em"></div>
+<script>
+fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
+  var el=document.getElementById('freshpill'); if(!el) return;
+  var h=(Date.now()-new Date(s.odds_asof).getTime())/36e5;
+  var stale=h>36;
+  el.style.background=stale?'#3a2b12':'#12291f';
+  el.style.color=stale?'#e8b44a':'#4ad6a2';
+  el.textContent='Odds updated '+(h<1?'under an hour':Math.round(h)+'h')+' ago · '+(s.event||'')
+    +(s.card_src==='auto'?' · card auto-adopted from feed — verify matchups':'');
+  el.style.display='';
+}).catch(function(){});
+</script>
 <div class="wrap">
   <header>
     <button id="themeBtn" class="theme-btn" aria-label="Toggle dark mode" title="Toggle dark / light theme" onclick="toggleTheme()"></button>

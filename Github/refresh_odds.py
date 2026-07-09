@@ -9,7 +9,7 @@ last good site live, and prints exactly what differed so a human can act.
 Exit 0 always (a blocked refresh is success, not failure).
 Writes .refresh_status for the workflow commit step: 'rebuilt' | 'blocked' | 'nochange'.
 """
-import json, subprocess, sys, shutil, pathlib
+import json, os, subprocess, sys, shutil, pathlib
 
 HERE = pathlib.Path(__file__).parent
 PY = sys.executable
@@ -49,9 +49,32 @@ def main():
         print(f"parse failed ({type(e).__name__}) — keeping last good build")
         status.write_text("blocked"); return
 
-    # 3) THE GATE — fighter-pair sets must be identical
+    mode = (os.environ.get("MODE") or "refresh").strip().lower()
+    if mode == "preview":
+        print("LIVE CARD PREVIEW — publish nothing, just show what the feed claims:")
+        for k, v in live.items():
+            print(f"   {v.get('f1','?')}  vs  {v.get('f2','?')}")
+        ch = pairs(pinned) ^ pairs(live)
+        print(f"vs pin: {'IDENTICAL' if not ch else str(len(ch)) + ' bout(s) differ'}")
+        print("If this card looks right, re-run with mode=adopt to make it the new pin.")
+        status.write_text("blocked"); return
+
+    # 3) THE GATE — fighter-pair sets must be identical (unless adopting)
     p_pin, p_live = pairs(pinned), pairs(live)
-    if p_pin != p_live:
+    if mode == "refresh" and p_pin != p_live:
+        # pinned card already fought? adopt the new one automatically, loudly
+        try:
+            import csv as _c, datetime as _d
+            u0 = list(_c.DictReader(open(HERE / "odds" / "upcoming.csv")))
+            cd = _d.date.fromisoformat(u0[0]["date"]) if u0 else None
+            if cd and (_d.date.today() - cd).days >= 1:
+                print(f"AUTO-ADOPT — pinned card ({cd}) is over; live card becomes the pin.")
+                mode = "adopt"
+        except Exception:
+            pass
+    if mode == "adopt":
+        print(f"ADOPT — human-approved: live card ({len(live)} bouts) becomes the new pin.")
+    elif p_pin != p_live:
         missing = sorted(p_pin - p_live); extra = sorted(p_live - p_pin)
         print("GATE BLOCKED — card mismatch vs pin (feed anomaly or real swap; "
               "if a swap is real, refresh the pin from a home build):")
@@ -59,8 +82,8 @@ def main():
         for x in extra:   print(f"  live-only: {x}")
         status.write_text("blocked"); return
 
-    # 4) identical card -> did prices actually move?
-    if json.dumps(pinned, sort_keys=True) == json.dumps(live, sort_keys=True):
+    # 4) identical card -> did prices actually move? (adopt always publishes)
+    if mode != "adopt" and json.dumps(pinned, sort_keys=True) == json.dumps(live, sort_keys=True):
         print("card matches, prices unchanged — nothing to publish")
         status.write_text("nochange"); return
 
@@ -92,6 +115,10 @@ def main():
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")
         json.dump(panel, open(HERE / "output" / "ledger.json", "w"), indent=1)
         shutil.copy(HERE / "output" / "ledger.json", HERE / "docs" / "ledger.json")
+        import datetime as _dt
+        _st = {"odds_asof": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="minutes"),
+               "event": name, "card_src": "cloud"}
+        json.dump(_st, open(HERE / "docs" / "status.json", "w"))
         print(f"Ledger: logged {nl}, settled {ng}, record n={panel.get('n', 0)}")
     except Exception as e:
         print(f"ledger step skipped ({type(e).__name__}: {e})")

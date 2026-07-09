@@ -56,6 +56,10 @@ def main():
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")
         json.dump(panel, open(HERE / "output" / "ledger.json", "w"), indent=1)
         shutil.copy(HERE / "output" / "ledger.json", HERE / "docs" / "ledger.json")
+        import datetime as _dt
+        _st = {"odds_asof": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="minutes"),
+               "event": name, "card_src": "home"}
+        json.dump(_st, open(HERE / "docs" / "status.json", "w"))
         msg = f"Ledger: logged {nl} new bouts, settled {ng}; record n={panel.get('n',0)}"
         if panel.get("n"): msg += f", acc {panel['acc']}%, Brier {panel['brier']}"
         if panel.get("market", {}).get("disagree_n") is not None:
