@@ -2,7 +2,13 @@ name: UFC odds auto-refresh
 on:
   schedule:
     - cron: "0 11,17,23 * * *"     # 6am / noon / 6pm CT — fight-day coverage
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "refresh = gated price update · preview = show live card · adopt = live card becomes the pin"
+        type: choice
+        default: refresh
+        options: [refresh, preview, adopt]
 permissions:
   contents: write
 concurrency:
@@ -20,6 +26,8 @@ jobs:
         run: pip install pandas requests
       - name: Fetch + gate + rebuild (only if card matches pin)
         working-directory: Github
+        env:
+          MODE: ${{ github.event.inputs.mode || 'refresh' }}
         run: python refresh_odds.py
       - name: Commit if rebuilt
         run: |
