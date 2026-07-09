@@ -55,6 +55,7 @@ def main():
         nl = ufc_grade.log_card(name, cdate, bouts)
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")
         json.dump(panel, open(HERE / "output" / "ledger.json", "w"), indent=1)
+        shutil.copy(HERE / "output" / "ledger.json", HERE / "docs" / "ledger.json")
         msg = f"Ledger: logged {nl} new bouts, settled {ng}; record n={panel.get('n',0)}"
         if panel.get("n"): msg += f", acc {panel['acc']}%, Brier {panel['brier']}"
         if panel.get("market", {}).get("disagree_n") is not None:

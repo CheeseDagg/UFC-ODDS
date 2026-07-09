@@ -91,6 +91,7 @@ def main():
         nl = ufc_grade.log_card(name, cdate, bouts)
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")
         json.dump(panel, open(HERE / "output" / "ledger.json", "w"), indent=1)
+        shutil.copy(HERE / "output" / "ledger.json", HERE / "docs" / "ledger.json")
         print(f"Ledger: logged {nl}, settled {ng}, record n={panel.get('n', 0)}")
     except Exception as e:
         print(f"ledger step skipped ({type(e).__name__}: {e})")

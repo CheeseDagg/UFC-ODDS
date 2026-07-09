@@ -4050,5 +4050,38 @@ try{ patchRecentResults(); }catch(e){}
 (function(){ let t=null; try{ t=localStorage.getItem('ufcTheme'); }catch(e){} applyTheme(t==='dark'); })();
 try{ renderWatch(); }catch(e){}
 </script>
+
+<!-- ===== LIVE LEDGER (forward record) — injected panel ===== -->
+<section class="lb" id="liveledger" style="display:none">
+  <div class="panel">
+    <h2>Live record — this model, graded going forward</h2>
+    <div id="ll_body" style="font-size:.92em;line-height:1.55;opacity:.92"></div>
+  </div>
+</section>
+<script>
+(function(){
+  fetch('ledger.json',{cache:'no-store'}).then(r=>r.json()).then(function(L){
+    var el=document.getElementById('ll_body'), sec=document.getElementById('liveledger');
+    if(!el||!sec) return;
+    var h='';
+    if(!L.n){
+      h='<b>'+((L.events||0))+'</b> card(s) logged pre-fight; results settle automatically as fight data updates. '+
+        'Unlike the calibration above (a historical backtest), this record only contains predictions published <i>before</i> the fights.';
+    } else {
+      h='<b>'+L.n+'</b> settled bouts: model favorite won <b>'+L.acc+'%</b> (Brier '+L.brier+')'+(L.voids?' · '+L.voids+' voided':'')+'.';
+      if(L.market && L.market.n){
+        var m=L.market;
+        h+=' Against the closing consensus on the same bouts: market <b>'+m.acc+'%</b>.';
+        if(m.disagree_n){
+          var col=(m.disagree_model_right>=50)?'#4ad6a2':'#e06c75';
+          h+=' When model and market picked <i>opposite corners</i> ('+m.disagree_n+' bouts): model right <b style="color:'+col+'">'+m.disagree_model_right+'%</b>.';
+        }
+      }
+      h+=' <span style="opacity:.65">Every number logged pre-fight — nothing retro-fitted.</span>';
+    }
+    el.innerHTML=h; sec.style.display='';
+  }).catch(function(){});
+})();
+</script>
 </body>
 </html>
