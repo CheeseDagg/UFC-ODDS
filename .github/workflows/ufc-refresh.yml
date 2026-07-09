@@ -1,0 +1,36 @@
+name: UFC odds auto-refresh
+on:
+  schedule:
+    - cron: "0 11,17,23 * * *"     # 6am / noon / 6pm CT — fight-day coverage
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: ufc-odds-refresh
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install deps
+        run: pip install pandas requests
+      - name: Fetch + gate + rebuild (only if card matches pin)
+        working-directory: Github
+        run: python refresh_odds.py
+      - name: Commit if rebuilt
+        run: |
+          [ "$(cat Github/.refresh_status 2>/dev/null)" = "rebuilt" ] || { echo "no publish ($(cat Github/.refresh_status 2>/dev/null))"; exit 0; }
+          git config user.name "ufc-bot"; git config user.email "actions@github.com"
+          for attempt in 1 2 3 4 5; do
+            git fetch origin main && git reset --mixed origin/main
+            git add Github/docs Github/odds Github/output Github/data/ufc_predictions.csv Github/data/ufc_graded.csv
+            git diff --cached --quiet && { echo "nothing changed"; exit 0; }
+            git commit -m "odds refresh $(date -u +%FT%H:%M)"
+            git push origin HEAD:main && exit 0
+            echo "retry $attempt"
+          done
+          exit 1
