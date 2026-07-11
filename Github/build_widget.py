@@ -169,7 +169,10 @@ def main():
     name_to_idx = {rc["name"]: i for i, rc in enumerate(recs)}
 
     def normname(s):
-        return s.lower().strip().replace(".", "").replace("'", "")
+        import unicodedata as _ud
+        s = _ud.normalize("NFKD", s)
+        s = "".join(c for c in s if not _ud.combining(c))
+        return "".join(c for c in s.lower() if c.isalnum())
     norm_idx = {normname(rc["name"]): i for i, rc in enumerate(recs)}
 
     # ── per-fighter career splits (DISPLAY-ONLY, descriptive history) ──────────
@@ -285,7 +288,10 @@ def main():
     # engine or the win model — it is a descriptive display layer, nothing more.
     # Absent file => the block simply doesn't render.
     def _nn(s):
-        return s.lower().strip().replace(".", "").replace("'", "")
+        import unicodedata as _ud
+        s = _ud.normalize("NFKD", s)
+        s = "".join(c for c in s if not _ud.combining(c))
+        return "".join(c for c in s.lower() if c.isalnum())
     reg = {}
     reg_path = HERE / "regional" / "regional_dataset_ranked.json"
     if reg_path.exists():

@@ -1046,7 +1046,7 @@ function ratingArr(r){
 }
 
 // name -> row index, for resolving upcoming-card fighters
-function normName(s){ return String(s).toLowerCase().trim().replace(/\./g,'').replace(/'/g,''); }
+function normName(s){ return String(s).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9]/g,''); }
 const byName = {};
 rows.forEach((r,i)=>{ byName[normName(r[C.name])] = i; });
 
