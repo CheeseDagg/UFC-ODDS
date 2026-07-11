@@ -1053,10 +1053,25 @@ rows.forEach((r,i)=>{ byName[normName(r[C.name])] = i; });
 // Resolve an upcoming-card fighter to a comparison ref so prospect bouts are
 // previewable: rated -> positive row index; prospect (<5 UFC bouts) -> negative
 // ref -(pi+1) (same encoding the comparison view uses); genuinely unknown -> null.
-let _prospIdx = null;
+let _prospIdx = null; let _sortedIdx = null;
 function refForName(name){
   const k = normName(name);
   if(k in byName) return byName[k];
+  // FEED NAME-DRIFT GUARDS: the odds feed flips fighters between aliases
+  // ("Bobby Green" vs "King Green") and word orders ("Cong Wang" vs "Wang Cong")
+  // pull-to-pull. Slugs stay stable upstream; the display join needs these:
+  const ALIAS = {bobbygreen:'kinggreen', kinggreen:'bobbygreen'};
+  if(ALIAS[k] && (ALIAS[k] in byName)) return byName[ALIAS[k]];
+  if(_sortedIdx === null){
+    _sortedIdx = {};
+    Object.keys(byName).forEach(kk=>{
+      const sk = kk.split('').sort().join('');   // order-insensitive char key
+      if(!(sk in _sortedIdx)) _sortedIdx[sk] = byName[kk];
+      else _sortedIdx[sk] = -1;                   // collision -> unusable
+    });
+  }
+  const sk = k.split('').sort().join('');
+  if(sk in _sortedIdx && _sortedIdx[sk] !== -1) return _sortedIdx[sk];
   if(_prospIdx === null){
     _prospIdx = {};
     PROSP.forEach((p,i)=>{ const kk=normName(p.name); if(!(kk in _prospIdx)) _prospIdx[kk]=i; });
