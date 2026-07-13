@@ -1,0 +1,34 @@
+name: UFC results update
+# Scrapes ufcstats.com for events completed since the stored through-date,
+# appends results to data/results_delta.csv, and rebuilds the site so every
+# fighter's record/history is current. Ratings stay on the validated baseline.
+# Sun+Mon 12:00 UTC catches Saturday cards once ufcstats posts them.
+on:
+  schedule:
+    - cron: "0 12 * * 0,1"
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  results:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Pull new results from ufcstats
+        working-directory: Github
+        run: |
+          python ufc_results_update.py --selftest
+          python ufc_results_update.py
+      - name: Rebuild site with current records
+        working-directory: Github
+        run: python build_site.py --local
+      - name: Commit
+        run: |
+          git config user.name ufc-bot
+          git config user.email ufc-bot@users.noreply.github.com
+          git add Github/data/results_delta.csv Github/data/results_through.txt Github/docs Github/output
+          git commit -m "results update + rebuild" || echo "no changes"
+          git push
