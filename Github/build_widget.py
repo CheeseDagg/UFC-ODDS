@@ -69,8 +69,47 @@ def load_upcoming():
     return {"date": date, "location": loc, "bouts": bouts, "cage": cage}
 
 
+def apply_results_delta(d):
+    """Merge post-baseline fight results (data/results_delta.csv, written by
+    ufc_results_update.py) into each fighter's displayed history/record —
+    BY NAME, into the named dicts, BEFORE row packing. Rating values are
+    deliberately untouched: skills stay on the validated baseline; records
+    stay current. Dedupes on (opponent, year, method) at history head."""
+    import csv as _csv
+    path = DATA / "results_delta.csv"
+    if not path.exists():
+        return 0
+    def _nn(s):
+        import unicodedata as _u
+        s = _u.normalize("NFKD", str(s))
+        s = "".join(c for c in s if not _u.combining(c))
+        return "".join(c for c in s.lower() if c.isalnum())
+    idx = {_nn(f.get("name","")): f for f in d.get("fighters", [])}
+    merged = 0
+    for r in _csv.DictReader(open(path)):
+        year = int(r["event_date"][:4]); meth = r["method"]; dt_s = r["event_date"]
+        for me, opp, won in ((r["winner"], r["loser"], 1), (r["loser"], r["winner"], 0)):
+            f = idx.get(_nn(me))
+            if not f: continue
+            if meth in ("NC", "DRAW") and won == 0:
+                won = 0  # both sides logged as the flag method, no win credited
+            h = f.setdefault("history", [])
+            entry = [opp, year, won if meth not in ("NC","DRAW") else 0, meth]
+            if h and h[0][0] == opp and h[0][1] == year and h[0][3] == meth:
+                continue                       # already merged on a prior build
+            h.insert(0, entry)
+            if str(f.get("last_fight_date","")) < dt_s:
+                f["last_fight_date"] = dt_s
+                f["last_fight_year"] = year
+            merged += 1
+    if merged:
+        print(f"[delta] merged {merged} post-baseline results into fighter records")
+    return merged
+
+
 def main():
     d = json.load(open(OUT / "ufc_ratings.json"))
+    apply_results_delta(d)
     import pandas as pd
     bouts = pd.read_csv(DATA / "fighter_bouts.csv")
     stats = pd.read_csv(DATA / "ufc_fight_stats.csv")
