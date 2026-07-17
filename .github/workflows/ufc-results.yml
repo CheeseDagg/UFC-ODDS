@@ -1,8 +1,9 @@
 name: UFC results update
-# Scrapes ufcstats.com for events completed since the stored through-date,
-# appends results to data/results_delta.csv, and rebuilds the site so every
-# fighter's record/history is current. Ratings stay on the validated baseline.
-# Sun+Mon 12:00 UTC catches Saturday cards once ufcstats posts them.
+# Pulls completed cards from ESPN's public UFC endpoint since the stored
+# through-date, appends to data/results_delta.csv, and rebuilds the site.
+# (Source moved off ufcstats.com 2026-07-17: it now serves a JS bot-check that
+# urllib cannot pass, which silently returned zero events.)
+# Sun+Mon 12:00 UTC catches Saturday cards.
 on:
   schedule:
     - cron: "0 12 * * 0,1"
@@ -17,7 +18,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
-      - name: Pull new results from ufcstats
+      - name: Install deps
+        run: pip install pandas          # build_widget.py needs it; the job never
+                                         # got this far before, so it went unnoticed
+      - name: Pull new results from ESPN
         working-directory: Github
         run: |
           python ufc_results_update.py --selftest
