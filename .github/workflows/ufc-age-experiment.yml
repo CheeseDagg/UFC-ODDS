@@ -1,0 +1,33 @@
+name: UFC age/reach experiment
+# On-demand research experiment: do fighter AGE (from DOB) and REACH beat the no-age
+# feature model out-of-sample? Scrapes DOB/reach (ufcstats), runs the leak-free backtest,
+# prints a VERDICT. Touches no production model — nothing ships unless it robustly wins.
+on:
+  workflow_dispatch: {}
+permissions:
+  contents: read
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Github
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: deps
+        run: pip install numpy
+      - name: selftest gate (leak-free logic must hold)
+        run: python3 ufc_age_experiment.py --selftest
+      - name: pull DOB/reach (ufcstats) then print age+reach verdict
+        run: |
+          python3 ufc_age_experiment.py --pull
+          python3 ufc_age_experiment.py
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ufc-age-result
+          path: Github/fighter_meta_cache.json
+          if-no-files-found: ignore
