@@ -57,7 +57,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BOUTS_CSV = os.path.join(HERE, "data", "fighter_bouts.csv")
 META_CACHE = os.path.join(HERE, "fighter_meta_cache.json")
 
-UFCSTATS_LIST = "http://ufcstats.com/statistics/fighters?char={c}&page=all"
+UFCSTATS_LIST = "https://ufcstats.com/statistics/fighters?char={c}&page=all"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 
@@ -141,7 +141,7 @@ def _is_block_error(e):
 
 
 # ufcstats fighter-detail parsing ------------------------------------------
-_DETAIL_URL_RE = re.compile(r"http://ufcstats\.com/fighter-details/[0-9a-f]+")
+_DETAIL_URL_RE = re.compile(r"https?://ufcstats\.com/fighter-details/[0-9a-f]+")
 _NAME_RE = re.compile(
     r'<span class="b-content__title-highlight">\s*(.*?)\s*</span>', re.S)
 
