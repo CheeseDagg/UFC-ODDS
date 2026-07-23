@@ -196,6 +196,7 @@ def load_cache():
             "reach": v.get("reach"),
             "height": v.get("height"),
             "name": v.get("name", k),
+            "_url": v.get("_url"),
         }
     return out
 
@@ -208,6 +209,7 @@ def save_cache(meta):
             "reach": v.get("reach"),
             "height": v.get("height"),
             "name": v.get("name", k),
+            "_url": v.get("_url"),      # resume marker — must survive save/load
         }
     tmp = META_CACHE + ".tmp"
     with open(tmp, "w") as f:
@@ -241,9 +243,8 @@ def pull_meta(sleep=0.25, limit=None):
             print("probe failed (%s): %s" % (type(e).__name__, tpl.format(c="a")))
             continue
     if list_tpl is None:
-        print("ufcstats UNREACHABLE from here (all host variants failed) -- run --pull "
-              "on GitHub Actions, where ufcstats.com is reachable.")
-        return meta, False
+        print("ufcstats yielded no fighter links (blocked or bot-walled) -- trying ESPN.")
+        return pull_meta_espn(meta, sleep=sleep, limit=limit)
     try:
         for c in letters[1:]:
             html = _http_get(list_tpl.format(c=c))
@@ -292,6 +293,85 @@ def pull_meta(sleep=0.25, limit=None):
     save_cache(meta)
     print("Pull complete: %d total fighter meta records (%d new)."
           % (len(meta), n_new))
+    return meta, True
+
+
+# ---- ESPN fallback: ufcstats bot-walls the Actions runner (pages load but carry
+# 0 fighter links). ESPN's core API is proven reachable from Actions (the results
+# workflow uses ESPN daily) and its athlete records carry dateOfBirth + reach. ----
+ESPN_LIST = ("https://sports.core.api.espn.com/v2/sports/mma/leagues/ufc/"
+             "athletes?limit=1000&page={p}")
+
+
+def _espn_rec_from_json(d):
+    """athlete JSON -> {name, dob, reach, height} (reach/height already inches)."""
+    name = (d.get("displayName") or d.get("fullName") or "").strip()
+    dob = None
+    raw = str(d.get("dateOfBirth") or "")[:10]
+    if raw:
+        try:
+            dob = dt.date.fromisoformat(raw)
+        except ValueError:
+            dob = None
+    def _f(k):
+        v = d.get(k)
+        try:
+            v = float(v)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+    return {"name": name or None, "dob": dob, "reach": _f("reach"), "height": _f("height")}
+
+
+def pull_meta_espn(meta, sleep=0.2, limit=None):
+    """Page through ESPN's UFC athlete index and fetch each athlete record.
+    Resume-safe via the _url marker persisted in the cache."""
+    print("Falling back to ESPN core API for DOB/reach ...")
+    refs = []
+    try:
+        first = json.loads(_http_get(ESPN_LIST.format(p=1)))
+        pages = int(first.get("pageCount") or 1)
+        refs += [it.get("$ref") for it in first.get("items", []) if it.get("$ref")]
+        for p in range(2, pages + 1):
+            j = json.loads(_http_get(ESPN_LIST.format(p=p)))
+            refs += [it.get("$ref") for it in j.get("items", []) if it.get("$ref")]
+            time.sleep(sleep)
+    except Exception as e:
+        print("ESPN athlete index UNREACHABLE (%s) -- run --pull on GitHub Actions."
+              % type(e).__name__)
+        return meta, False
+    if limit:
+        refs = refs[:limit]
+    print("ESPN athlete refs: %d" % len(refs))
+    done = {v.get("_url") for v in meta.values() if isinstance(v, dict)}
+    n_new = 0
+    for ref in refs:
+        if ref in done:
+            continue
+        try:
+            rec = _espn_rec_from_json(json.loads(_http_get(ref)))
+        except Exception as e:
+            if _is_block_error(e):
+                print("ESPN became UNREACHABLE mid-pull (%s) after %d new records -- "
+                      "partial cache saved; re-run to resume." % (type(e).__name__, n_new))
+                save_cache(meta)
+                return meta, False
+            time.sleep(1.0)
+            continue
+        if rec.get("name") and (rec.get("dob") or rec.get("reach")):
+            key = norm_name(rec["name"])
+            # never clobber a richer existing record with a poorer one
+            old = meta.get(key)
+            if not (old and old.get("dob") and rec.get("dob") is None):
+                rec["_url"] = ref
+                meta[key] = rec
+                n_new += 1
+        if n_new and n_new % 200 == 0:
+            save_cache(meta)
+            print("  ... %d new ESPN records cached" % n_new)
+        time.sleep(sleep)
+    save_cache(meta)
+    print("ESPN pull complete: %d total fighter meta records (%d new)." % (len(meta), n_new))
     return meta, True
 
 
@@ -774,6 +854,16 @@ def _selftest():
                  'http://ufcstats.com/fighter-details/deadbeef0001')
     urls = _extract_detail_urls(urls_html)
     check("detail-url extraction dedupes", len(urls) == 2)
+
+    # ESPN fallback record parser (offline fixture mirrors the core-API shape)
+    er = _espn_rec_from_json({"displayName": "Jane Roe",
+                              "dateOfBirth": "1991-06-03T07:00Z",
+                              "reach": 68.0, "height": 66.0})
+    check("espn parser name", er["name"] == "Jane Roe")
+    check("espn parser dob", er["dob"] == dt.date(1991, 6, 3))
+    check("espn parser reach", er["reach"] == 68.0)
+    er2 = _espn_rec_from_json({"displayName": "No Data Guy", "reach": 0})
+    check("espn parser missing fields -> None", er2["dob"] is None and er2["reach"] is None)
 
     # (c) logistic scoring math --------------------------------------------
     check("sigmoid(0)==0.5", abs(sigmoid(0.0) - 0.5) < 1e-12)

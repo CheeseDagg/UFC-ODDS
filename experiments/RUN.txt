@@ -1,1 +1,1 @@
-trigger experiments — run 3 (www host + variant fallback)
+trigger experiments — run 4 (ESPN core-API fallback for DOB/reach; ufcstats bot-walls the runner)
