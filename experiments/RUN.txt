@@ -1,1 +1,1 @@
-trigger experiments — run 2 (fixed data pull)
+trigger experiments — run 3 (www host + variant fallback)

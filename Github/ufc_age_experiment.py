@@ -57,7 +57,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 BOUTS_CSV = os.path.join(HERE, "data", "fighter_bouts.csv")
 META_CACHE = os.path.join(HERE, "fighter_meta_cache.json")
 
-UFCSTATS_LIST = "https://ufcstats.com/statistics/fighters?char={c}&page=all"
+# ufcstats serves on the www host (bare-host TLS fails; in-page links are www too).
+# Try each variant in order until one answers.
+UFCSTATS_LIST_VARIANTS = (
+    "http://www.ufcstats.com/statistics/fighters?char={c}&page=all",
+    "https://www.ufcstats.com/statistics/fighters?char={c}&page=all",
+    "http://ufcstats.com/statistics/fighters?char={c}&page=all",
+)
+UFCSTATS_LIST = UFCSTATS_LIST_VARIANTS[0]
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
 
@@ -141,7 +148,7 @@ def _is_block_error(e):
 
 
 # ufcstats fighter-detail parsing ------------------------------------------
-_DETAIL_URL_RE = re.compile(r"https?://ufcstats\.com/fighter-details/[0-9a-f]+")
+_DETAIL_URL_RE = re.compile(r"https?://(?:www\.)?ufcstats\.com/fighter-details/[0-9a-f]+")
 _NAME_RE = re.compile(
     r'<span class="b-content__title-highlight">\s*(.*?)\s*</span>', re.S)
 
@@ -216,20 +223,38 @@ def pull_meta(sleep=0.25, limit=None):
     """
     meta = load_cache()
 
-    # 1) gather detail URLs from the a-z list pages
+    # 1) gather detail URLs from the a-z list pages. Pick the first host variant that
+    # answers with actual detail links (bare-host TLS fails; links live on www).
     urls = set()
     letters = "abcdefghijklmnopqrstuvwxyz"
+    list_tpl = None
+    for tpl in UFCSTATS_LIST_VARIANTS:
+        try:
+            html = _http_get(tpl.format(c="a"))
+            found = _extract_detail_urls(html)
+            print("probe %s -> %d detail links" % (tpl.format(c="a"), len(found)))
+            if found:
+                list_tpl = tpl
+                urls.update(found)
+                break
+        except Exception as e:
+            print("probe failed (%s): %s" % (type(e).__name__, tpl.format(c="a")))
+            continue
+    if list_tpl is None:
+        print("ufcstats UNREACHABLE from here (all host variants failed) -- run --pull "
+              "on GitHub Actions, where ufcstats.com is reachable.")
+        return meta, False
     try:
-        for c in letters:
-            html = _http_get(UFCSTATS_LIST.format(c=c))
+        for c in letters[1:]:
+            html = _http_get(list_tpl.format(c=c))
             urls.update(_extract_detail_urls(html))
             time.sleep(sleep)
     except Exception as e:
         if _is_block_error(e):
-            print("ufcstats UNREACHABLE from here (%s) -- run --pull on GitHub "
-                  "Actions, where ufcstats.com is reachable." % type(e).__name__)
-            return meta, False
-        raise
+            print("ufcstats became UNREACHABLE during list crawl (%s) -- continuing "
+                  "with %d pages found so far." % (type(e).__name__, len(urls)))
+        else:
+            raise
 
     urls = sorted(urls)
     if limit:
