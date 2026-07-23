@@ -1,7 +1,10 @@
 Loading /home/runner/work/UFC-ODDS/UFC-ODDS/Github/data/fighter_bouts.csv ...
 Deduped 17372 mirrored rows -> 8686 unique fights (1994-03-11 .. 2026-06-14).
 No fighter_meta_cache.json -- attempting DOB/reach pull ...
-ufcstats UNREACHABLE from here (URLError) -- run --pull on GitHub Actions, where ufcstats.com is reachable.
+probe http://www.ufcstats.com/statistics/fighters?char=a&page=all -> 0 detail links
+probe failed (URLError): https://www.ufcstats.com/statistics/fighters?char=a&page=all
+probe http://ufcstats.com/statistics/fighters?char=a&page=all -> 0 detail links
+ufcstats UNREACHABLE from here (all host variants failed) -- run --pull on GitHub Actions, where ufcstats.com is reachable.
 ========================================================================
 WALK-FORWARD  (train = fights before 2022-03-26, holdout = on/after)
   total fights: 8686   train: 6514   holdout: 2172
