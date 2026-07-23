@@ -15,6 +15,7 @@ import os, csv, math, datetime as dt, unicodedata, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLOG = os.path.join(HERE, "data", "ufc_predictions.csv")
 GRADED = os.path.join(HERE, "data", "ufc_graded.csv")
+DELTA = os.path.join(HERE, "data", "results_delta.csv")
 COLS = ["logged", "event", "date", "f1", "f2", "p1", "q1", "outcome"]
 VOID_DAYS = 14
 
@@ -136,12 +137,36 @@ def _isdate(s):
     try: dt.date.fromisoformat(s); return True
     except (ValueError, TypeError): return False
 
-def grade_all(bouts_csv):
+def _results_map_delta(delta_csv):
+    """results_delta.csv (fresh completed cards written by the results workflow) ->
+    {(normA, normB, date): winner_norm}. This is how the ledger settles bouts that
+    finished AFTER the last fighter_bouts.csv ratings scrape. Without it grade_all only
+    ever sees the frozen ratings-baseline file, so no logged prediction from a new card
+    can settle and the advertised LIVE record stays stuck at n=0."""
+    res = {}
+    if not delta_csv or not os.path.exists(delta_csv):
+        return res
+    with open(delta_csv) as f:
+        for r in csv.DictReader(f):
+            w, l = norm(r.get("winner")), norm(r.get("loser"))
+            d = (r.get("event_date") or "").strip()
+            if not (w and l and d):
+                continue
+            res[(min(w, l), max(w, l), d)] = w
+    return res
+
+def grade_all(bouts_csv, delta_csv=None):
     ensure_files()
+    if delta_csv is None:
+        delta_csv = DELTA
     preds = load_csv(PLOG)
     if not preds: return 0, summarize([])
     done = {(r["date"],) + _pair(r["f1"], r["f2"]) for r in load_csv(GRADED)}
     res = _results_map(bouts_csv)
+    # merge in fresh results (new cards not yet in the ratings scrape); keep the
+    # authoritative bouts_csv winner if a bout somehow appears in both.
+    for k, w in _results_map_delta(delta_csv).items():
+        res.setdefault(k, w)
     new = []
     for r in preds:
         k = (r["date"],) + _pair(r["f1"], r["f2"])
@@ -199,7 +224,8 @@ def selftest():
         w.writerow({"fighter": "Manuel Torres", "opp": "Rafael Fiziev", "date": recent, "won": 1, "decided": 1})
         w.writerow({"fighter": "Rafael Fiziev", "opp": "Manuel Torres", "date": recent, "won": 0, "decided": 1})
         w.writerow({"fighter": "Oscar Pinera", "opp": "Old Result", "date": recent, "won": 1, "decided": 1})
-    n, p = grade_all(rcsv)
+    _nodelta = os.path.join(tmp, "nodelta.csv")           # isolate from the real results_delta
+    n, p = grade_all(rcsv, delta_csv=_nodelta)
     # settles: Fiziev bout (f2 wins), Pinera bout (f1 wins, accent-matched),
     # stale Never/Happened -> void; recent Ghost/Cancelled -> pending (day 3 < 14)
     assert n == 3, n
@@ -212,9 +238,32 @@ def selftest():
     # disagreements: Fiziev (model f1 vs market f2) -> model wrong there
     assert m["n"] == 2 and m["acc"] == 50.0
     assert m["disagree_n"] == 1 and m["disagree_model_right"] == 0.0
-    n2, _ = grade_all(rcsv)
+    n2, _ = grade_all(rcsv, delta_csv=_nodelta)
     assert n2 == 0                                  # idempotent grading
     json.dumps(p)
+    # DELTA SETTLE: a bout that finished after the ratings scrape lives ONLY in
+    # results_delta.csv — grade_all must settle it from there, else the LIVE ledger is
+    # permanently stuck at n=0 (the actual production bug this fixes).
+    dtmp = os.path.join(tmp, "delta.csv")
+    with open(dtmp, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["event_date", "event", "winner", "loser", "method", "round"])
+        w.writeheader()
+        w.writerow({"event_date": recent, "event": "Fresh Card", "winner": "Manuel Torres",
+                    "loser": "Rafael Fiziev", "method": "?", "round": 3})
+    dm = _results_map_delta(dtmp)
+    _a, _b = norm("Manuel Torres"), norm("Rafael Fiziev")
+    assert dm[(min(_a, _b), max(_a, _b), recent)] == _a, "delta winner must map correctly"
+    assert _results_map_delta(os.path.join(tmp, "missing.csv")) == {}   # missing file -> empty, no crash
+    # a fresh temp ledger: the Fiziev/Torres prediction settles from delta alone (no bouts_csv row)
+    _op, _og = PLOG, GRADED
+    PLOG, GRADED = os.path.join(tmp, "p2.csv"), os.path.join(tmp, "g2.csv")
+    log_card("Delta Card", recent, [{"f1": "Rafael Fiziev", "f2": "Manuel Torres", "p1": 0.62, "q1": 0.5}])
+    _empty_bouts = os.path.join(tmp, "empty_bouts.csv")
+    with open(_empty_bouts, "w", newline="") as f:
+        csv.DictWriter(f, fieldnames=["fighter", "opp", "date", "won", "decided"]).writeheader()
+    nd, pd_ = grade_all(_empty_bouts, delta_csv=dtmp)
+    assert nd == 1 and pd_["n"] == 1, (nd, pd_)      # settled purely from results_delta
+    PLOG, GRADED = _op, _og
     # resolver: real Baku-card drift cases
     K = {norm(x) for x in ["Nazim Sadykhov","Asu Almabayev","Michal Oleksiejczuk",
          "Nursulton Ruziboev","Shara Magomedov","Abus Magomedov","Umar Nurmagomedov",

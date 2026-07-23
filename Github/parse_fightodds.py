@@ -259,10 +259,12 @@ def main():
     for path in a.inputs:
         try:
             J = json.load(open(path))
+            if not isinstance(J, dict):               # null / list / stray body that's still valid JSON
+                raise ValueError(f"top-level JSON is {type(J).__name__}, expected object")
+            ev = parse_event(J)
         except Exception as e:
             print(f"  ! skip {path}: {e}")
             continue
-        ev = parse_event(J)
         merged.update(ev)
         print(f"  + {path}: {len(ev)} fights")
 
