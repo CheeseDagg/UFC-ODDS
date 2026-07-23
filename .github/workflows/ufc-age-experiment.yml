@@ -1,33 +1,36 @@
 name: UFC age/reach experiment
-# On-demand research experiment: do fighter AGE (from DOB) and REACH beat the no-age
-# feature model out-of-sample? Scrapes DOB/reach (ufcstats), runs the leak-free backtest,
-# prints a VERDICT. Touches no production model — nothing ships unless it robustly wins.
+# Research experiment: do fighter age (DOB) and reach beat the no-age feature model?
+# Auto-runs when experiments/RUN.txt changes; commits its VERDICT (and the scraped
+# DOB/reach cache) back to the repo. Touches no production model.
 on:
   workflow_dispatch: {}
+  push:
+    paths: ['experiments/RUN.txt']
 permissions:
-  contents: read
+  contents: write
 jobs:
   experiment:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: Github
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: '3.11' }
-      - name: deps
-        run: pip install numpy
-      - name: selftest gate (leak-free logic must hold)
-        run: python3 ufc_age_experiment.py --selftest
-      - name: pull DOB/reach (ufcstats) then print age+reach verdict
+      - run: pip install numpy
+      - name: run experiment -> verdict file
         run: |
-          python3 ufc_age_experiment.py --pull
-          python3 ufc_age_experiment.py
-      - name: upload results
+          mkdir -p experiments
+          set -o pipefail
+          cd Github
+          python3 ufc_age_experiment.py --selftest
+          python3 ufc_age_experiment.py --pull 2>&1 | tail -8 || true
+          python3 ufc_age_experiment.py 2>&1 | tee ../experiments/UFC-AGE-VERDICT.md || true
+      - name: commit verdict
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ufc-age-result
-          path: Github/fighter_meta_cache.json
-          if-no-files-found: ignore
+        run: |
+          git config user.name ufc-bot
+          git config user.email actions@github.com
+          git add experiments/UFC-AGE-VERDICT.md Github/fighter_meta_cache.json || true
+          if git diff --cached --quiet; then echo "no verdict change"; exit 0; fi
+          git commit -m "UFC age/reach experiment verdict $(date -u +%F)"
+          for i in 1 2 3 4 5; do git pull --rebase --autostash origin main && git push && { echo pushed; exit 0; }; sleep 3; done
