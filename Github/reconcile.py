@@ -113,17 +113,24 @@ class Reconciler:
         return best, self.div.get(best)
 
     def match_pref(self, name, slug=""):
-        """Prefer the fightodds.io SLUG for matching. Slugs carry a permanent
-        numeric id and stay constant even when the feed flips a fighter's
-        display-name spelling between pulls, so matching on the slug makes a
-        fighter resolve the SAME way every build (no flicker, no greying).
-        Falls back to the display name only when the slug doesn't resolve."""
+        """Prefer the fightodds.io SLUG for matching. Slugs carry a permanent numeric id
+        and stay constant even when the feed flips a fighter's display-name spelling
+        between pulls, so matching on the slug makes a fighter resolve the SAME way every
+        build (no flicker, no greying).
+
+        BUT if the bout's DISPLAY name confidently resolves to a DIFFERENT roster fighter
+        than the slug does, the slug is mislabeled for this bout (e.g. 'Rick Davis'
+        carrying a 'mike-davis' slug) — trust the display name so we never grade the wrong
+        fighter. When the display name doesn't resolve (the flip/grey case the slug is
+        meant to fix), the slug still wins."""
         sn = _name_from_slug(slug)
-        if sn:
-            c, d = self.match(sn)
-            if d is not None:                       # slug resolved to a dataset fighter
-                return c, d
-        return self.match(name)
+        slug_c, slug_d = self.match(sn) if sn else (name, None)
+        name_c, name_d = self.match(name)
+        if slug_d is not None:
+            if name_d is not None and name_c != slug_c:
+                return name_c, name_d        # slug vs display conflict -> the bout's name wins
+            return slug_c, slug_d
+        return name_c, name_d
 
 
 def _name_from_slug(slug):

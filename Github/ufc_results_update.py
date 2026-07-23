@@ -66,15 +66,21 @@ def is_final(comp):
     return bool(st.get("completed")) or st.get("state") == "post"
 
 def parse_method_round(comp):
-    """ESPN spells the finish inside status.type (detail/description/shortDetail)
-    and the round in status.period. Several shapes are tolerated; if none match
-    we return ('?', round) rather than inventing a method."""
-    st  = _status(comp)
-    txt = " ".join(str(st.get(k) or "") for k in ("detail", "shortDetail", "description"))
+    """The finish METHOD lives in competition.details[].type.text as
+    'Unofficial Winner <Method>' (Kotko / Submission / Decision / ...), NOT in
+    status.type — which only ever says 'Final' on ESPN's scoreboard (verified against a
+    real completed card). Round is competition.status.period. We scan details first, then
+    fall back to any status-type text (older/other feeds and the offline fixtures).
+    Returns ('?', round) only when nothing resolves — never invents a method."""
+    st = _status(comp)
+    parts = [((d.get("type") or {}).get("text") or "")
+             for d in (comp.get("details") or []) if isinstance(d, dict)]
+    parts += [str(st.get(k) or "") for k in ("detail", "shortDetail", "description")]
+    txt = " ".join(parts)
     low = txt.lower()
 
     rnd = comp.get("status", {}).get("period") or 0
-    m = re.search(r"\bround\s*(\d)\b|\bR(\d)\b", txt, re.I)
+    m = re.search(r"\bround\s*(\d)\b|\bR(\d)\b", txt, re.I)   # explicit text round overrides period
     if m:
         rnd = int(m.group(1) or m.group(2))
     try:
@@ -85,13 +91,14 @@ def parse_method_round(comp):
     if "no contest" in low or re.search(r"\bnc\b", low):        return "NC", rnd
     if "draw" in low:                                           return "Draw", rnd
     if "disqualif" in low or re.search(r"\bdq\b", low):         return "DQ", rnd
-    if "submission" in low or "sub" == low.strip():             return "SUB", rnd
-    if "decision" in low or "dec" in low.split():
+    if "submission" in low or re.search(r"\bsub\b", low):       return "SUB", rnd
+    if ("kotko" in low or "ko/tko" in low or "knockout" in low or "stoppage" in low
+            or "doctor" in low or re.search(r"\bt?ko\b", low)): return "KO/TKO", rnd
+    if "decision" in low or re.search(r"\bdec\b", low):
         if "split"     in low: return "S-DEC", rnd
         if "majority"  in low: return "M-DEC", rnd
-        return "U-DEC", rnd
-    if "ko" in low or "tko" in low or "knockout" in low or "stoppage" in low or "doctor" in low:
-        return "KO/TKO", rnd
+        if "unanimous" in low: return "U-DEC", rnd
+        return "DEC", rnd       # ESPN's details text is just 'Decision' (no U/S/M split)
     return "?", rnd
 
 def parse_card(doc):
@@ -121,9 +128,11 @@ def parse_card(doc):
                     continue
                 fights.append((name, wn, ln[0], method, rnd))
             else:
-                # draw / NC: no winner flag. record with a non-decisive method.
-                if method in ("Draw", "NC"):
-                    fights.append((name, names[0], names[1], method, rnd))
+                # no single winner on a FINAL bout = draw or no-contest. Record it (never
+                # silently drop) with a non-decisive method so the grader VOIDS the bet
+                # instead of losing the result. If ESPN didn't label it, default to Draw.
+                m = method if method in ("Draw", "NC") else "Draw"
+                fights.append((name, names[0], names[1], m, rnd))
     return fights
 
 # ---------------- selftest ----------------
@@ -143,6 +152,7 @@ FIX_CARD = {"events": [{"name": "UFC 329: McGregor vs. Holloway 2", "competition
     _bout("Alessandro Costa", "Cody Durden", "Submission - Round 2, 2:19", 2),
     _bout("Mario Bautista", "Cory Sandhagen", "Decision - Unanimous", 3),
     _bout("Farid Basharat", "John Garza", "Decision - Split", 3),
+    _bout("Kai Kara-France", "Steve Erceg", "Draw", 3, no_winner=True),   # no winner -> recorded, not dropped
     {"competitors": [{"athlete": {"fullName": "Ode Osbourne"}, "winner": False},
                      {"athlete": {"fullName": "Someone Else"}, "winner": False}],
      "status": {"period": 0, "type": {"completed": False, "state": "pre", "detail": "Scheduled"}}},
@@ -155,11 +165,20 @@ def selftest():
     assert cal[1][0] == dt.date(2026, 7, 19)
 
     f = parse_card(FIX_CARD)
-    assert len(f) == 4, f"expected 4 completed bouts, got {len(f)}: {f}"
+    assert len(f) == 5, f"expected 5 completed bouts, got {len(f)}: {f}"
     assert f[0] == ("UFC 329: McGregor vs. Holloway 2", "Max Holloway", "Conor McGregor", "KO/TKO", 1), f[0]
     assert f[1][1:] == ("Alessandro Costa", "Cody Durden", "SUB", 2), f[1]
     assert f[2][4] == 3 and f[2][3] == "U-DEC", f[2]
     assert f[3][3] == "S-DEC", f[3]
+    # no-winner FINAL bout is recorded as a Draw (not silently dropped)
+    assert f[4] == ("UFC 329: McGregor vs. Holloway 2", "Kai Kara-France", "Steve Erceg", "Draw", 3), f[4]
+    # METHOD from ESPN's real shape: competition.details[].type.text 'Unofficial Winner <X>'
+    _real = {"status": {"period": 2, "type": {"description": "Final"}},
+             "details": [{"type": {"text": "Unofficial Winner Kotko"}}]}
+    assert parse_method_round(_real) == ("KO/TKO", 2), parse_method_round(_real)
+    _dec = {"status": {"period": 3, "type": {"description": "Final"}},
+            "details": [{"type": {"text": "Unofficial Winner Decision"}}]}
+    assert parse_method_round(_dec) == ("DEC", 3), parse_method_round(_dec)
     # scheduled bout must be excluded
     assert all("Osbourne" not in r[2] for r in f)
     # method vocabulary

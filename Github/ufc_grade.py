@@ -148,6 +148,8 @@ def _results_map_delta(delta_csv):
         return res
     with open(delta_csv) as f:
         for r in csv.DictReader(f):
+            if (r.get("method") or "").strip() in ("Draw", "NC"):
+                continue                 # no winner -> let the prediction void, never mis-settle
             w, l = norm(r.get("winner")), norm(r.get("loser"))
             d = (r.get("event_date") or "").strip()
             if not (w and l and d):

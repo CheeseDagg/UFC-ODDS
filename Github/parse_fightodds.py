@@ -282,6 +282,19 @@ def main():
         if debut:
             print(f"  not in dataset (kept, will show unpriceable): {', '.join(sorted(debut))}")
 
+    # sanity: no fighter should appear in more than one bout on a card. The feed keys on
+    # the fighter PAIR, so a double-booking (same slug in two bouts) passes through silently
+    # and corrupts the board — surface it loudly rather than shipping a bad card.
+    _fcount = {}
+    for v in merged.values():
+        for side in ("f1", "f2"):
+            key = _rec._norm(v[side]) if rec is not None else nm(v[side])
+            _fcount.setdefault(key, []).append(v[side])
+    _dupes = {names[0] for names in _fcount.values() if len(names) > 1}
+    if _dupes:
+        print(f"  ! WARNING: fighter(s) booked in >1 bout (feed/dedup error, check the card): "
+              f"{', '.join(sorted(_dupes))}")
+
     outp = pathlib.Path(a.out)
     outp.parent.mkdir(parents=True, exist_ok=True)
     json.dump(merged, open(outp, "w"), separators=(",", ":"))
