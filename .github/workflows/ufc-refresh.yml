@@ -29,13 +29,16 @@ jobs:
         env:
           MODE: ${{ github.event.inputs.mode || 'refresh' }}
         run: python refresh_odds.py
+      - name: Blend A/B log (fail-soft)
+        working-directory: Github
+        run: python ufc_blend_predict.py || true
       - name: Commit if rebuilt
         run: |
           [ "$(cat Github/.refresh_status 2>/dev/null)" = "rebuilt" ] || { echo "no publish ($(cat Github/.refresh_status 2>/dev/null))"; exit 0; }
           git config user.name "ufc-bot"; git config user.email "actions@github.com"
           for attempt in 1 2 3 4 5; do
             git fetch origin main && git reset --mixed origin/main
-            git add Github/docs Github/odds Github/output Github/data/ufc_predictions.csv Github/data/ufc_graded.csv
+            git add Github/docs Github/odds Github/output Github/data/ufc_predictions.csv Github/data/ufc_graded.csv Github/data/ufc_predictions_blend.csv Github/data/ufc_graded_blend.csv Github/output/blend_ab.json
             git diff --cached --quiet && { echo "nothing changed"; exit 0; }
             git commit -m "odds refresh $(date -u +%FT%H:%M)"
             git push origin HEAD:main && exit 0

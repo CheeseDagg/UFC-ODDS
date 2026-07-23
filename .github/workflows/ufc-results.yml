@@ -29,11 +29,14 @@ jobs:
       - name: Rebuild site with current records
         working-directory: Github
         run: python build_site.py --local
+      - name: Blend grade (fail-soft)
+        working-directory: Github
+        run: python ufc_blend_predict.py --grade-only || true
       - name: Commit
         run: |
           git config user.name ufc-bot
           git config user.email ufc-bot@users.noreply.github.com
-          for p in Github/data/results_delta.csv Github/data/results_through.txt Github/docs Github/output; do
+          for p in Github/data/results_delta.csv Github/data/results_through.txt Github/docs Github/output Github/data/ufc_predictions_blend.csv Github/data/ufc_graded_blend.csv Github/output/blend_ab.json; do
             git add "$p" 2>/dev/null || true
           done
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
