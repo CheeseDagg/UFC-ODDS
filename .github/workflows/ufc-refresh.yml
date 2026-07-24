@@ -9,6 +9,8 @@ on:
         type: choice
         default: refresh
         options: [refresh, preview, adopt]
+  push:
+    paths: ['experiments/REBUILD.txt']   # touch this file to refresh odds on demand
 permissions:
   contents: write
 concurrency:
