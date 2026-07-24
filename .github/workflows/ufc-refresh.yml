@@ -2,6 +2,7 @@ name: UFC odds auto-refresh
 on:
   schedule:
     - cron: "0 11,17,23 * * *"     # 6am / noon / 6pm CT — fight-day coverage
+    - cron: "0 15,16,18,19,20 * * 5" # FRIDAY weigh-in burst (~8am-1pm PT): lines move on misses/scratches
   workflow_dispatch:
     inputs:
       mode:
