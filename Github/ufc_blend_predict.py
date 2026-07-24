@@ -293,9 +293,22 @@ def predict_card(state, pred_a, pred_b, dobs, values, cdate):
     except (ValueError, TypeError):
         fdate = dt.date.today()
     bouts, details = [], []
+    STALE_YEARS = 6                        # a namesake guard, not a comeback penalty
     for v in values:
         k1 = ufc_grade.resolve(v.get("f1", ""), keys)
         k2 = ufc_grade.resolve(v.get("f2", ""), keys)
+        # NAMESAKE GUARD (the 'Rick Davis 2006' bug): if the resolved history's last
+        # fight is >6 years before this card, it is almost certainly a DIFFERENT person
+        # with the same name (UFC re-signs almost nobody after 6+ years out). Treat the
+        # card fighter as unknown -> bout is skipped rather than priced off a stranger's
+        # 20-year-old record.
+        for kk in ("k1", "k2"):
+            k = locals()[kk]
+            if k:
+                st = state[keys[k]]
+                if st.last is not None and (fdate - st.last).days > STALE_YEARS * 365:
+                    if kk == "k1": k1 = None
+                    else: k2 = None
         if not k1 or not k2 or k1 == k2:
             continue                       # unknown to the state — skip bout
         n1, n2 = keys[k1], keys[k2]
