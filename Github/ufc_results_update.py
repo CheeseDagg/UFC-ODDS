@@ -261,7 +261,18 @@ def main():
         sys.exit("FATAL: calendar parsed to zero events — ESPN shape changed?")
     today = dt.date.today()
     new = [(d, label, eid) for (d, label, eid) in cal if through < d <= today]
-    print(f"cards on calendar: {len(cal)} | new since through-date: {len(new)}")
+    # GAP SCAN — ESPN's scoreboard calendar is a ROLLING window: by the time a Sun/Mon
+    # run fires, cards older than ~a week can have dropped off it entirely, silently
+    # skipping them forever (this voided the whole 2026-07-11 card). Probe every
+    # uncovered date in (through, today] directly via ?dates= — cheap, ≤ a few GETs.
+    covered = {d for d, _, _ in cal}
+    gap = [through + dt.timedelta(days=k) for k in range(1, (today - through).days + 1)]
+    gap = [d for d in gap if d not in covered and d not in {x[0] for x in new}]
+    for d in gap:
+        new.append((d, f"gap-scan {d.isoformat()}", None))
+    new.sort()
+    print(f"cards on calendar: {len(cal)} | new since through-date: {len(new)} "
+          f"(incl. {len(gap)} gap-scan probes)")
     if not new:
         print("nothing to do — records already current"); return
 
@@ -275,8 +286,12 @@ def main():
         if fights and d > newest:
             newest = d
 
+    n_cal = sum(1 for _, _, eid in new if eid is not None)
     if not rows:
-        sys.exit(f"FATAL: {len(new)} new card(s) but zero bouts parsed — ESPN shape changed?")
+        if n_cal:
+            sys.exit(f"FATAL: {n_cal} calendar card(s) but zero bouts parsed — ESPN shape changed?")
+        print("gap-scan found no completed bouts — nothing to do")
+        return
 
     os.makedirs(DATA, exist_ok=True)
     seen = set()
