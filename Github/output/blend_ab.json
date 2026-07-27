@@ -1,15 +1,15 @@
 {
- "generated": "2026-07-27T13:41:17+00:00",
+ "generated": "2026-07-27T14:53:12+00:00",
  "production": {
-  "n": 3,
-  "voids": 6,
-  "events": 2,
-  "acc": 66.7,
-  "brier": 0.2381,
+  "n": 11,
+  "voids": 0,
+  "events": 3,
+  "acc": 36.4,
+  "brier": 0.2801,
   "market": {
-   "n": 3,
-   "acc": 100.0,
-   "disagree_n": 1,
+   "n": 11,
+   "acc": 81.8,
+   "disagree_n": 5,
    "disagree_model_right": 0.0
   }
  },
