@@ -17,14 +17,27 @@ essentially the current roster. The unmatched names are overwhelmingly retired:
 Aaron Brink, Akihiro Gono, Alessio Sakara, Adrian Serrano. They are not missing
 because of a bug; they are not in the index.
 
-SOURCES, in order of yield per request:
-  1. WIKIDATA, one bulk SPARQL query: every human whose occupation is mixed
-     martial artist, with DOB and every alias. Historical coverage is its whole
-     point, and it is one request rather than 1,296. Matched on the SAME
-     normalizer the model uses, plus alias rows, so "Alexey/Aleksei Oleinik"
-     style transliteration variants join.
-  2. ESPN SEARCH, per remaining name: the search endpoint reaches athletes the
+SOURCES, in order of yield:
+  1. UFCSTATS.COM — the source fighter_bouts.csv was scraped from, which is the
+     whole reason it wins. Every other source has a name-matching problem;
+     this one has the SAME names, because it is the same database. Its A-Z
+     index enumerates every fighter who has ever appeared on a UFC card,
+     retired or not, and each detail page carries DOB *and STANCE*. Stance is
+     a listed model blind spot (southpaw/style matchups), so this pull is
+     worth more than the DOB alone.
+  2. WIKIDATA, one bulk SPARQL query: every human whose occupation is mixed
+     martial artist, with DOB and every alias. Best-effort second pass for
+     names ufcstats spells differently.
+  3. ESPN SEARCH, per remaining name: the search endpoint reaches athletes the
      index page does not enumerate.
+
+WHAT ROUND ONE BOUGHT, AND WHY ROUND TWO EXISTS. Wikidata added 51 fighters
+and the ESPN search pass added zero, moving both-corners coverage 46.5% ->
+49%. Still missing: Chuck Liddell, Tito Ortiz, Nate Diaz, Jose Aldo, Diego
+Sanchez. Those men are certainly in Wikidata, so the ceiling was never the
+data — the SPARQL alias join is simply not reaching them. Rather than debug a
+query I cannot run from this sandbox, round two goes to the source the bout
+file itself came from, where the join is an identity.
 
 RULES.
   * NEVER overwrite an existing DOB. This only fills holes. The shipped cache
@@ -48,6 +61,7 @@ META = os.path.join(HERE, "fighter_meta_cache.json")
 BOUTS = os.path.join(HERE, "data", "fighter_bouts.csv")
 
 UA = {"User-Agent": "CheeseDagg-ufc-odds/1.0 (DOB backfill for a personal model)"}
+UFCSTATS_INDEX = "http://ufcstats.com/statistics/fighters?char={c}&page=all"
 WDQS = "https://query.wikidata.org/sparql"
 ESPN_SEARCH = ("https://site.web.api.espn.com/apis/common/v3/search"
                "?query={q}&limit=8&sport=mma")
@@ -125,6 +139,120 @@ def plausible(dob, first_bout):
 
 
 # ------------------------------------------------------------------ sources
+# --- 1. ufcstats.com (same database the bout file came from) ---------------
+LINK_RE = re.compile(
+    r'href="(http://(?:www\.)?ufcstats\.com/fighter-details/[0-9a-f]+)"[^>]*>'
+    r'\s*([^<]*?)\s*</a>', re.I)
+MONTHS = {m: i + 1 for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
+
+
+def parse_index(html):
+    """Index page -> {detail_url: 'First Last'}.
+
+    Each row links the fighter's first name and last name separately to the
+    SAME detail URL, so grouping the anchor texts by href and joining them in
+    document order rebuilds the full name without depending on the table
+    layout, which is the part of a scrape most likely to be re-skinned.
+    """
+    order, parts = [], {}
+    for url, txt in LINK_RE.findall(html):
+        url = url.replace("www.", "")
+        if url not in parts:
+            parts[url] = []
+            order.append(url)
+        if txt:
+            parts[url].append(txt)
+    return {u: " ".join(parts[u]).strip() for u in order if parts[u]}
+
+
+def _detail_field(html, label):
+    """Pull one 'LABEL:' list item off a fighter detail page."""
+    m = re.search(r"<i[^>]*>\s*" + label + r":\s*</i>\s*([^<]*)", html, re.I)
+    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+
+
+def parse_detail(html):
+    """Detail page -> {'dob': 'YYYY-MM-DD'|None, 'stance': str|None}.
+
+    ufcstats prints '--' for unknown, which must read as absent rather than as
+    a parse failure — a fighter with no DOB on file is a normal outcome, not
+    a sign the scrape broke.
+    """
+    out = {"dob": None, "stance": None}
+    raw = _detail_field(html, "DOB")
+    m = re.match(r"([A-Za-z]{3})[a-z]*\s+(\d{1,2}),\s*(\d{4})", raw)
+    if m and m.group(1).title() in MONTHS:
+        out["dob"] = (f"{int(m.group(3)):04d}-{MONTHS[m.group(1).title()]:02d}"
+                      f"-{int(m.group(2)):02d}")
+    st = _detail_field(html, "STANCE")
+    if st and st != "--":
+        out["stance"] = st.title()
+    return out
+
+
+def match_key(indexed_name, wanted):
+    """Which key in `wanted` this index row is, or None.
+
+    The index row may carry a nickname anchor on the same href, so the joined
+    text can be 'Chuck Liddell The Iceman'. Try the whole string first, then
+    the leading two tokens. Nothing looser than that: dropping to a surname
+    match would happily hand Nate Diaz's DOB to Nick.
+    """
+    full = norm_name(indexed_name)
+    if full in wanted:
+        return full
+    toks = full.split()
+    if len(toks) > 2:
+        short = " ".join(toks[:2])
+        if short in wanted:
+            return short
+    return None
+
+
+def pull_ufcstats(wanted, log=print, max_fetch=None):
+    """{norm_name: {'dob':..., 'stance':...}} for names in `wanted`.
+
+    Fetches the 26 index pages first and only then the detail pages of names
+    we actually need, so a 1,245-name hole costs ~1,271 requests rather than
+    the ~4,400 a full crawl would.
+    """
+    index = {}
+    for c in "abcdefghijklmnopqrstuvwxyz":
+        try:
+            html = _get(UFCSTATS_INDEX.format(c=c), timeout=60).decode(
+                "utf-8", "replace")
+        except Exception as e:
+            log(f"  index '{c}' failed ({type(e).__name__})")
+            continue
+        found = parse_index(html)
+        index.update(found)
+        time.sleep(0.2)
+    log(f"  ufcstats index: {len(index)} fighters enumerated")
+    todo = []
+    for u, nm in index.items():
+        k = match_key(nm, wanted)
+        if k:
+            todo.append((u, nm, k))
+    if max_fetch:
+        todo = todo[:max_fetch]
+    log(f"  {len(todo)} of them are names we are missing — fetching details")
+    out = {}
+    for i, (url, nm, key) in enumerate(todo):
+        try:
+            rec = parse_detail(_get(url, timeout=45).decode("utf-8", "replace"))
+        except Exception:
+            continue
+        time.sleep(0.12)
+        if rec["dob"] or rec["stance"]:
+            out[key] = dict(rec, name=nm)
+        if (i + 1) % 200 == 0:
+            log(f"  ...{i + 1}/{len(todo)}  hits {len(out)}")
+    return out
+
+
+# --- 2. wikidata -----------------------------------------------------------
 WD_QUERY = """
 SELECT ?person ?name ?dob WHERE {
   ?person wdt:P106 wd:Q11338576 ; wdt:P569 ?dob .
@@ -224,15 +352,51 @@ def main():
     print("BEFORE: ", end="")
     report(meta)
 
-    added = {"wikidata": 0, "espn": 0}
+    added = {"ufcstats": 0, "wikidata": 0, "espn": 0}
     rejected = 0
+    stances = 0
+
+    # --- pass 1: ufcstats, the same database the bout file came from --------
+    if "--no-ufcstats" not in sys.argv:
+        print("ufcstats pass")
+        try:
+            us = pull_ufcstats(set(missing),
+                               max_fetch=int(os.environ.get("UFCSTATS_MAX", "0"))
+                               or None)
+        except Exception as e:
+            print(f"  ufcstats UNREACHABLE ({type(e).__name__}) — run on Actions")
+            us = {}
+        for k, rec in us.items():
+            # STANCE is a new field, not a hole-fill, so it is written for any
+            # fighter who lacks one — including men who already have a DOB.
+            # It is the raw material for the southpaw angle, which is a listed
+            # blind spot, and it costs nothing extra to keep.
+            if rec.get("stance"):
+                cur = meta.get(k) if isinstance(meta.get(k), dict) else None
+                if cur is not None and not cur.get("stance"):
+                    cur["stance"] = rec["stance"]
+                    stances += 1
+            if k not in missing or not rec.get("dob"):
+                continue
+            if not plausible(rec["dob"], first.get(k)):
+                rejected += 1
+                continue
+            meta[k] = {"name": missing[k], "dob": rec["dob"],
+                       "stance": rec.get("stance"), "_src": "ufcstats"}
+            added["ufcstats"] += 1
+            missing.pop(k)
+            stances += 1 if rec.get("stance") else 0
+        print(f"  ufcstats filled {added['ufcstats']} DOBs, {stances} stances")
+        json.dump(meta, open(META, "w"), indent=1, sort_keys=True)
+
+    # --- pass 2: wikidata (best effort — a failure here must not abort the
+    # run now that pass 1 has already banked its results) -------------------
     try:
         wd = pull_wikidata()
         print(f"wikidata rows: {len(wd)} unambiguous fighter names")
     except Exception as e:
-        print(f"Wikidata UNREACHABLE ({type(e).__name__}) — run on Actions "
-              "(touch experiments/RUN-DOB.txt)")
-        return 0
+        print(f"Wikidata UNREACHABLE ({type(e).__name__}) — continuing")
+        wd = {}
     for k in list(missing):
         d = wd.get(k)
         if not d:
@@ -259,7 +423,8 @@ def main():
                 json.dump(meta, open(META, "w"), indent=1, sort_keys=True)
 
     json.dump(meta, open(META, "w"), indent=1, sort_keys=True)
-    print(f"added: wikidata {added['wikidata']}  espn {added['espn']}  "
+    print(f"added: ufcstats {added['ufcstats']}  wikidata {added['wikidata']}  "
+          f"espn {added['espn']}  stances {stances}  "
           f"rejected as implausible {rejected}")
     print("AFTER:  ", end="")
     report(meta)
@@ -280,6 +445,49 @@ def selftest():
     m = {"joe blow": {"name": "Joe Blow", "dob": "1985-05-05"}}
     assert dob_index(m)["joe blow"] == "1985-05-05"
     assert norm_name("Joe Blow") in dob_index(m)
+
+    # --- ufcstats parsers, against markup shaped like the real pages --------
+    idx = '''
+    <tr class="b-statistics__table-row">
+      <td><a href="http://ufcstats.com/fighter-details/abc123" class="b-link">Chuck</a></td>
+      <td><a href="http://ufcstats.com/fighter-details/abc123" class="b-link">Liddell</a></td>
+      <td><a href="http://ufcstats.com/fighter-details/abc123" class="b-link">The Iceman</a></td>
+    </tr>
+    <tr><td><a href="http://ufcstats.com/fighter-details/def456">Tito</a></td>
+        <td><a href="http://ufcstats.com/fighter-details/def456">Ortiz</a></td></tr>
+    '''
+    got = parse_index(idx)
+    # the nickname column is a third anchor on the same href; joining in
+    # document order keeps it on the end, so the NORMALIZED first two tokens
+    # are what the join uses. Assert the row is grouped, not that it is clean.
+    assert len(got) == 2, got
+    assert got["http://ufcstats.com/fighter-details/abc123"].startswith(
+        "Chuck Liddell"), got
+    assert got["http://ufcstats.com/fighter-details/def456"] == "Tito Ortiz"
+    want = {"chuck liddell", "tito ortiz"}
+    assert match_key("Chuck Liddell The Iceman", want) == "chuck liddell"
+    assert match_key("Tito Ortiz", want) == "tito ortiz"
+    assert match_key("Nick Diaz", want) is None
+    # never loosen to a surname: that hands one brother the other's birthday
+    assert match_key("Nathan Diaz", want) is None
+    assert match_key("Someone Else Entirely", want) is None
+    # a two-token index row is never truncated further, so an exact name that
+    # simply is not wanted stays unmatched rather than falling back
+    assert match_key("Chuck Norris", want) is None
+
+    det = ('<li class="b-list__box-list-item"><i class="b-list__box-item-title">'
+           'DOB:</i>\n      Dec 17, 1969\n</li>'
+           '<li><i class="b-list__box-item-title">STANCE:</i> Orthodox </li>')
+    p = parse_detail(det)
+    assert p["dob"] == "1969-12-17", p
+    assert p["stance"] == "Orthodox", p
+    # '--' is ufcstats for "not on file" and must read as absent, not as a
+    # broken parse — otherwise a normal gap looks like a scrape failure
+    blank = ('<li><i class="b-list__box-item-title">DOB:</i> --</li>'
+             '<li><i class="b-list__box-item-title">STANCE:</i> --</li>')
+    assert parse_detail(blank) == {"dob": None, "stance": None}
+    assert parse_detail("<html>nothing here</html>") == {"dob": None,
+                                                         "stance": None}
     print("DOB BACKFILL SELFTEST PASS — normalizer mirrors production, "
           "plausibility gate rejects namesakes, existing DOBs untouched")
     return 0
