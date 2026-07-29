@@ -53,14 +53,36 @@ RULES.
 Offline (sandbox): both hosts are blocked, so this prints UNREACHABLE and exits
 0. Fire it on Actions by touching experiments/RUN-DOB.txt.
 """
-import csv, json, os, re, sys, time, datetime as dt
+import csv, http.cookiejar, json, os, re, sys, time, datetime as dt
 import urllib.parse, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 META = os.path.join(HERE, "fighter_meta_cache.json")
 BOUTS = os.path.join(HERE, "data", "fighter_bouts.csv")
 
-UA = {"User-Agent": "CheeseDagg-ufc-odds/1.0 (DOB backfill for a personal model)"}
+# Round 4 proved ufcstats does not serve the fighter index to this client at
+# all: all 26 letter pages came back as the SAME 2,994-byte "Loading…"
+# interstitial with zero 'fighter-details' anchors — a JS challenge, not a
+# parse failure. A self-identifying UA is the most common trigger for that, and
+# a challenge that sets a cookie cannot work at all against a client that
+# throws its cookies away between requests. Round 5 changes both: a browser-
+# shaped header set and one shared cookie jar for the whole process.
+#
+# Wikidata is the exception — it ASKS for a descriptive UA and rate-limits
+# generic browser strings, so it keeps the honest one.
+UA = {
+    "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) "
+                   "Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,*/*;q=0.8"),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+POLITE_UA = {"User-Agent": ("CheeseDagg-ufc-odds/1.0 "
+                            "(DOB backfill for a personal model)")}
+_JAR = http.cookiejar.CookieJar()
+_OPENER = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(_JAR))
 UFCSTATS_INDEX = "http://ufcstats.com/statistics/fighters?char={c}&page=all"
 WDQS = "https://query.wikidata.org/sparql"
 ESPN_SEARCH = ("https://site.web.api.espn.com/apis/common/v3/search"
@@ -75,9 +97,26 @@ def norm_name(name):
     return re.sub(r"\s+", " ", n)
 
 
-def _get(url, timeout=30):
-    req = urllib.request.Request(url, headers=UA)
-    return urllib.request.urlopen(req, timeout=timeout).read()
+def _get(url, timeout=30, headers=None):
+    """One shared cookie jar for the process. See the UA comment above.
+
+    Wikidata gets POLITE_UA passed explicitly; everything else gets the
+    browser-shaped default.
+    """
+    req = urllib.request.Request(url, headers=headers or UA)
+    return _OPENER.open(req, timeout=timeout).read()
+
+
+def looks_like_challenge(html):
+    """A 200 that contains no content is the failure round 4 exposed.
+
+    ufcstats returned an identical 2,994-byte '<title>Loading…</title>' shell
+    for all 26 index letters. It is worth naming that shape explicitly, because
+    'short page, no anchors, HTTP 200' is otherwise indistinguishable from
+    'this letter genuinely has no fighters' — and the second reading is what
+    cost round 3 an entire silent hour.
+    """
+    return len(html) < 8000 and "fighter-details" not in html.lower()
 
 
 # ------------------------------------------------------------------ inputs
@@ -232,6 +271,18 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
     throw away every DOB the run had already paid for.
     """
     index = {}
+    # Warm the jar on the site root first. If the interstitial is a cookie-
+    # setting challenge, the cookie is what the index pages need, and the old
+    # client discarded it. Cheap enough to be worth doing unconditionally.
+    try:
+        root = _get("http://ufcstats.com/statistics/events/completed",
+                    timeout=45).decode("utf-8", "replace")
+        log(f"  warmed cookie jar: {len(root)} chars, "
+            f"{len(_JAR)} cookie(s) held")
+    except Exception as e:
+        log(f"  cookie warm failed ({type(e).__name__})")
+
+    dumped = False
     for c in "abcdefghijklmnopqrstuvwxyz":
         try:
             html = _get(UFCSTATS_INDEX.format(c=c), timeout=60).decode(
@@ -247,10 +298,20 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
             # fighter-details anchors present is the regex drifting again, and a
             # long body with none of them means the page moved.
             anchors = html.lower().count("fighter-details")
-            head = re.sub(r"\s+", " ", html[:200])
             log(f"  index '{c}' parsed 0 rows from {len(html)} chars, "
-                f"{anchors} 'fighter-details' mentions")
-            log(f"    head: {head}")
+                f"{anchors} 'fighter-details' mentions, "
+                f"challenge={looks_like_challenge(html)}")
+            if not dumped:
+                # Print the WHOLE body once. It is ~3 KB, and round 4 spent a
+                # full round trip learning only the first 200 characters of it.
+                # Whatever the challenge wants — a cookie, a meta refresh, a
+                # script-computed token — it is stated in here somewhere, and
+                # guessing at it one 200-char window at a time is the expensive
+                # way to find out.
+                dumped = True
+                log("    ---- full challenge body ----")
+                log(html[:6000])
+                log("    ---- end body ----")
         index.update(found)
         time.sleep(0.2)
     log(f"  ufcstats index: {len(index)} fighters enumerated")
@@ -293,7 +354,9 @@ def pull_wikidata():
     """One bulk query -> {norm_name: 'YYYY-MM-DD'}. Alias rows included so
     transliteration variants (Aleksei/Alexey) join."""
     url = WDQS + "?format=json&query=" + urllib.parse.quote(WD_QUERY)
-    raw = json.loads(_get(url, timeout=180))
+    # POLITE_UA on purpose: WDQS asks for a descriptive User-Agent and throttles
+    # generic browser strings. The browser-shaped default exists for ufcstats.
+    raw = json.loads(_get(url, timeout=180, headers=POLITE_UA))
     out = {}
     for b in raw["results"]["bindings"]:
         nm = b.get("name", {}).get("value")

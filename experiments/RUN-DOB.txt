@@ -1,17 +1,20 @@
-round 4 — 2026-07-29
+round 5 — 2026-07-29
 
-Round 3 reported for the first time (that was the point of round 3) and the
-report was damning in a useful way: every step said "success", the 26 ufcstats
-index pages fetched without a single exception, and the enumeration was ZERO
-fighters. Coverage did not move: 4223/8686 before, 4223/8686 after.
+Round 4's diagnostic did its job and cleared the scraper of the charge. All 26
+index letters came back as the SAME 2,994-byte page: `<title>Loading…</title>`,
+`robots: noindex`, zero 'fighter-details' anchors. That is a JS interstitial,
+not a parse failure and not an outage — ufcstats does not serve the fighter
+index to this client at all. The scheme-agnostic regex from round 4 was still
+worth having, but it was not the problem.
 
-A scrape that fetches cleanly and parses to nothing is not a network problem.
-LINK_RE required the href to start with `http://`; ufcstats serving `https://`
-would produce exactly this signature and no error. Round 4 makes the pattern
-scheme-agnostic (https, http, protocol-relative, www or not, any case),
-rebuilds the detail URL from the captured fighter ID rather than trusting the
-page's spelling of it, and — if a page still parses to zero — logs the body
-length, the count of 'fighter-details' mentions and the first 200 characters.
+Two things about the old client made a challenge unpassable by construction:
+it announced itself as "CheeseDagg-ufc-odds/1.0", and it discarded cookies
+between requests, so a challenge that works by setting one could never have
+succeeded. Round 5 sends a browser-shaped header set, keeps ONE cookie jar for
+the whole process, and warms it on the events page before touching the index.
+Wikidata keeps the honest descriptive UA — WDQS asks for one and throttles
+generic browser strings.
 
-So round 4 either fixes it or says which of the three remaining possibilities
-it is: a block page, a moved page, or the regex drifting somewhere else.
+And if it is still blocked, round 5 prints the entire ~3 KB body once instead
+of the first 200 characters. Whatever the interstitial wants is written in
+there. Round 4 spent a whole round trip to read two hundred characters of it.
