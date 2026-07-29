@@ -367,7 +367,11 @@ def main():
     tee("")
     tee("Ship rule: ROBUST WIN on the AGE-COMPLETE subset. An angle that wins")
     tee("only on the full sample is most likely re-discovering age.")
-    vd = os.path.join(HERE, "..", "experiments", "UFC-ANGLES2-VERDICT.md")
+    # VERDICT_OUT lets a re-run (e.g. after the DOB backfill widens the age
+    # control) write beside the original instead of clobbering it — the two
+    # verdicts are only interesting side by side.
+    vd = os.environ.get("VERDICT_OUT") or os.path.join(
+        HERE, "..", "experiments", "UFC-ANGLES2-VERDICT.md")
     os.makedirs(os.path.dirname(vd), exist_ok=True)
     with open(vd, "w") as f:
         f.write("\n".join(lines) + "\n")

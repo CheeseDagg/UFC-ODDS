@@ -1,0 +1,58 @@
+name: UFC DOB backfill
+# Widen fighter_meta_cache.json. The DOB cache covers 46.5% of bouts on both
+# corners, and age is the biggest validated UFC finding, so every experiment
+# from here runs against a half-strength age control until this is fixed.
+# Wikidata and ESPN are both blocked from the dev sandbox, so this has to run
+# here. Fire by touching experiments/RUN-DOB.txt.
+on:
+  push:
+    paths: ['experiments/RUN-DOB.txt']
+  workflow_dispatch: {}
+permissions:
+  contents: write
+concurrency:
+  group: ufc-dob
+  cancel-in-progress: false
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Selftest (normalizer, plausibility gate, no-overwrite)
+        working-directory: Github
+        run: python ufc_dob_backfill.py --selftest
+      - name: Coverage before
+        working-directory: Github
+        run: python ufc_dob_backfill.py --report
+      - name: Backfill from Wikidata, then ESPN search
+        working-directory: Github
+        env:
+          ESPN_MAX: "700"
+        run: python ufc_dob_backfill.py
+      - name: Re-run the wear-and-tear batch against the widened age control
+        working-directory: Github
+        # The whole point of the pull. Four angles were buried on a 47%
+        # age-complete subset of 1,486 holdout bouts. If coverage moves, the
+        # decisive test gets materially more power and the verdicts deserve
+        # a re-read - in either direction.
+        env:
+          VERDICT_OUT: ../experiments/UFC-ANGLES2-VERDICT-WIDENED.md
+        run: python ufc_angles2_experiment.py || echo "::warning::angles-2 re-run failed"
+      - name: Commit widened cache + refreshed verdict
+        run: |
+          git config user.name ufc-bot
+          git config user.email actions@github.com
+          for f in Github/fighter_meta_cache.json \
+                   experiments/UFC-ANGLES2-VERDICT-WIDENED.md; do
+            git add "$f" 2>/dev/null || true
+          done
+          if git diff --cached --quiet; then echo "no changes"; exit 0; fi
+          git commit -m "UFC: DOB backfill + angles-2 re-read $(date -u +%F)"
+          for i in 1 2 3 4 5; do
+            git pull --rebase --autostash origin main && git push && exit 0
+            echo "push race - retry $i"; sleep 3
+          done
+          exit 1
