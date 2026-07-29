@@ -81,7 +81,12 @@ L2 = 1.0 / 0.25                          # sklearn-style C ~= 0.25
 DEBUT_DSL = math.log1p(365.0)            # neutral layoff for debutants
 
 FEATS_B = ["elo", "strike_ema", "grap_ema", "ctrl_ema", "won_ema",
-           "sub_ema", "nfights", "dsl"]
+           "sub_ema", "nfights", "dsl", "chin"]
+# "chin" = cumulative KO/TKO losses BEFORE this fight. Validated 2026-07-29
+# (ufc_angles_experiment): robust win vs Elo-only (+0.0089 LL/bout, 3/3
+# periods) AND vs Elo+age (+0.0052, 3/3) — damage accrual is real signal
+# beyond age. (Win-streak momentum tested same day: survives Elo-only but
+# NOT age-adjusted robustly -> not shipped.)
 FEATS_A = FEATS_B + ["age_diff", "age2_diff"]
 
 
@@ -106,7 +111,7 @@ def _f(row, k):
 # ---------------------------------------------------------------------------
 
 class FighterState:
-    __slots__ = ("elo", "n", "last", "ema")
+    __slots__ = ("elo", "n", "last", "ema", "ko_losses")
 
     def __init__(self):
         self.elo = ELO_BASE
@@ -114,6 +119,7 @@ class FighterState:
         self.last = None                                  # date of last fight
         self.ema = {"strike": None, "grap": None, "ctrl": None,
                     "won": None, "sub": None}
+        self.ko_losses = 0
 
 
 def _fight_vals(row):
@@ -145,6 +151,7 @@ def _pre_feats(st, fight_date):
         0.0 if e["sub"] is None else e["sub"],
         float(st.n),
         dsl,
+        float(st.ko_losses),
     ]
 
 
@@ -155,6 +162,8 @@ def _update_state(st, row, fight_date):
                                                  (1.0 - EMA_ALPHA) * st.ema[k])
     st.n += 1
     st.last = fight_date
+    if _f(row, "lost_by_ko") >= 1.0:
+        st.ko_losses += 1
 
 
 def dedupe_fights(rows):
