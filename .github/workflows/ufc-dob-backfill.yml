@@ -1,9 +1,18 @@
 name: UFC DOB backfill
-# Widen fighter_meta_cache.json. The DOB cache covers 46.5% of bouts on both
+# Widen fighter_meta_cache.json. The DOB cache covers 48.6% of bouts on both
 # corners, and age is the biggest validated UFC finding, so every experiment
 # from here runs against a half-strength age control until this is fixed.
-# Wikidata and ESPN are both blocked from the dev sandbox, so this has to run
-# here. Fire by touching experiments/RUN-DOB.txt.
+# Wikidata, ESPN and ufcstats are all blocked from the dev sandbox, so this has
+# to run here. Fire by touching experiments/RUN-DOB.txt.
+#
+# WHY THIS FILE REPORTS ITS OWN OUTCOME. Round 2 (the ufcstats source) fired
+# and nothing ever landed on main. From the dev sandbox that is indistinguishable
+# from three different things: the job failed, the job succeeded and found no new
+# DOBs, or the job never started. api.github.com is blocked from the sandbox
+# (502 through the proxy), so a commit is the ONLY channel back. A run that can
+# fail silently is a run that costs a round trip to diagnose, so every step now
+# captures its own log, no step can abort the job before the reporting step, and
+# the status file is committed with `if: always()` — including on failure.
 on:
   push:
     paths: ['experiments/RUN-DOB.txt']
@@ -21,18 +30,55 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
+
+      # Every worker step is continue-on-error and tees to logs/. Nothing here
+      # is allowed to kill the job, because the job's most valuable output when
+      # something breaks is the reason it broke.
       - name: Selftest (normalizer, plausibility gate, no-overwrite)
+        id: selftest
+        continue-on-error: true
         working-directory: Github
-        run: python ufc_dob_backfill.py --selftest
+        run: |
+          mkdir -p ../logs
+          python ufc_dob_backfill.py --selftest 2>&1 | tee ../logs/selftest.txt
+
       - name: Coverage before
+        id: before
+        continue-on-error: true
         working-directory: Github
-        run: python ufc_dob_backfill.py --report
-      - name: Backfill from Wikidata, then ESPN search
+        run: |
+          mkdir -p ../logs
+          python ufc_dob_backfill.py --report 2>&1 | tee ../logs/before.txt
+
+      - name: Backfill (ufcstats, then Wikidata, then ESPN search)
+        id: backfill
+        continue-on-error: true
+        # STEP timeout, not just a job timeout. This is the leading suspect for
+        # why round 2 vanished: ~1,271 ufcstats requests plus 700 ESPN searches
+        # plus the angles-2 re-run can exceed the 75-minute JOB budget, and a
+        # job timeout is a cancellation — the commit step never runs and the
+        # whole hour is thrown away with nothing to show. A STEP timeout fails
+        # only this step, continue-on-error swallows it, and the status file
+        # still lands saying exactly that.
+        timeout-minutes: 38
         working-directory: Github
         env:
-          ESPN_MAX: "700"
-        run: python ufc_dob_backfill.py
+          ESPN_MAX: "300"
+        run: |
+          mkdir -p ../logs
+          python ufc_dob_backfill.py 2>&1 | tail -c 60000 | tee ../logs/backfill.txt
+
+      - name: Coverage after
+        id: after
+        continue-on-error: true
+        working-directory: Github
+        run: |
+          mkdir -p ../logs
+          python ufc_dob_backfill.py --report 2>&1 | tee ../logs/after.txt
+
       - name: Re-run the wear-and-tear batch against the widened age control
+        id: angles
+        continue-on-error: true
         working-directory: Github
         # The whole point of the pull. Four angles were buried on a 47%
         # age-complete subset of 1,486 holdout bouts. If coverage moves, the
@@ -40,17 +86,55 @@ jobs:
         # a re-read - in either direction.
         env:
           VERDICT_OUT: ../experiments/UFC-ANGLES2-VERDICT-WIDENED.md
-        run: python ufc_angles2_experiment.py || echo "::warning::angles-2 re-run failed"
-      - name: Commit widened cache + refreshed verdict
+        run: |
+          mkdir -p ../logs
+          python ufc_angles2_experiment.py 2>&1 | tail -c 40000 | tee ../logs/angles.txt
+
+      - name: Write run status
+        if: always()
+        run: |
+          mkdir -p experiments logs
+          {
+            echo "# DOB backfill run status"
+            echo ""
+            echo "run    $GITHUB_RUN_ID  attempt $GITHUB_RUN_NUMBER"
+            echo "sha    $GITHUB_SHA"
+            echo "when   $(date -u +%FT%TZ)"
+            echo ""
+            echo "step outcomes (failure here is the whole point of this file):"
+            echo "  selftest  ${{ steps.selftest.outcome }}"
+            echo "  before    ${{ steps.before.outcome }}"
+            echo "  backfill  ${{ steps.backfill.outcome }}"
+            echo "  after     ${{ steps.after.outcome }}"
+            echo "  angles    ${{ steps.angles.outcome }}"
+            echo ""
+            echo "coverage BEFORE:"; sed 's/^/  /' logs/before.txt 2>/dev/null || echo "  (step did not run)"
+            echo "coverage AFTER:";  sed 's/^/  /' logs/after.txt  2>/dev/null || echo "  (step did not run)"
+            echo ""
+            echo "--- backfill tail (last 120 lines) ---"
+            tail -n 120 logs/backfill.txt 2>/dev/null || echo "(no backfill log — the step never produced output)"
+            echo ""
+            echo "--- angles tail (last 40 lines) ---"
+            tail -n 40 logs/angles.txt 2>/dev/null || echo "(no angles log)"
+          } > experiments/DOB-RUN-STATUS.md
+          cat experiments/DOB-RUN-STATUS.md
+
+      - name: Commit widened cache + refreshed verdict + status
+        if: always()
         run: |
           git config user.name ufc-bot
           git config user.email actions@github.com
+          # DOB-RUN-STATUS.md changes every run (run id, timestamp), so this
+          # commit lands whether or not the backfill found anything. That is
+          # deliberate: "no new DOBs" and "the scraper 403'd" must not look the
+          # same from a machine that can only read main.
           for f in Github/fighter_meta_cache.json \
-                   experiments/UFC-ANGLES2-VERDICT-WIDENED.md; do
+                   experiments/UFC-ANGLES2-VERDICT-WIDENED.md \
+                   experiments/DOB-RUN-STATUS.md; do
             git add "$f" 2>/dev/null || true
           done
           if git diff --cached --quiet; then echo "no changes"; exit 0; fi
-          git commit -m "UFC: DOB backfill + angles-2 re-read $(date -u +%F)"
+          git commit -m "UFC DOB backfill run $(date -u +%F): status + any widened cache"
           for i in 1 2 3 4 5; do
             git pull --rebase --autostash origin main && git push && exit 0
             echo "push race - retry $i"; sleep 3

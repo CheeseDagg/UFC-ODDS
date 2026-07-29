@@ -211,12 +211,18 @@ def match_key(indexed_name, wanted):
     return None
 
 
-def pull_ufcstats(wanted, log=print, max_fetch=None):
+def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
     """{norm_name: {'dob':..., 'stance':...}} for names in `wanted`.
 
     Fetches the 26 index pages first and only then the detail pages of names
     we actually need, so a 1,245-name hole costs ~1,271 requests rather than
     the ~4,400 a full crawl would.
+
+    `on_partial(out)` is called every 200 details with everything found so far.
+    The caller banks it to disk. That exists because the only way this pass is
+    known to die is a wall-clock kill in CI — round 2 fired and nothing ever
+    reached main — and a SIGKILL near the end of the budget would otherwise
+    throw away every DOB the run had already paid for.
     """
     index = {}
     for c in "abcdefghijklmnopqrstuvwxyz":
@@ -249,6 +255,8 @@ def pull_ufcstats(wanted, log=print, max_fetch=None):
             out[key] = dict(rec, name=nm)
         if (i + 1) % 200 == 0:
             log(f"  ...{i + 1}/{len(todo)}  hits {len(out)}")
+            if on_partial:
+                on_partial(out)
     return out
 
 
@@ -359,33 +367,52 @@ def main():
     # --- pass 1: ufcstats, the same database the bout file came from --------
     if "--no-ufcstats" not in sys.argv:
         print("ufcstats pass")
+
+        def absorb(us):
+            """Fold a ufcstats result dict into meta. Idempotent by design.
+
+            Called both mid-pass (every 200 details, so a CI kill cannot cost
+            work already paid for) and once at the end. Re-absorbing rows it
+            has already absorbed is a no-op: `k not in missing` skips a filled
+            DOB and the stance write is guarded on the field being empty, so
+            no counter double-increments.
+            """
+            nonlocal rejected, stances
+            for k, rec in us.items():
+                # STANCE is a new field, not a hole-fill, so it is written for
+                # any fighter who lacks one — including men who already have a
+                # DOB. It is the raw material for the southpaw angle, which is
+                # a listed blind spot, and it costs nothing extra to keep.
+                if rec.get("stance"):
+                    cur = meta.get(k) if isinstance(meta.get(k), dict) else None
+                    if cur is not None and not cur.get("stance"):
+                        cur["stance"] = rec["stance"]
+                        stances += 1
+                if k not in missing or not rec.get("dob"):
+                    continue
+                if not plausible(rec["dob"], first.get(k)):
+                    rejected += 1
+                    continue
+                meta[k] = {"name": missing[k], "dob": rec["dob"],
+                           "stance": rec.get("stance"), "_src": "ufcstats"}
+                added["ufcstats"] += 1
+                missing.pop(k)
+                stances += 1 if rec.get("stance") else 0
+
+        def bank(us):
+            absorb(us)
+            json.dump(meta, open(META, "w"), indent=1, sort_keys=True)
+            print(f"  banked: {added['ufcstats']} DOBs so far")
+
         try:
             us = pull_ufcstats(set(missing),
                                max_fetch=int(os.environ.get("UFCSTATS_MAX", "0"))
-                               or None)
+                               or None,
+                               on_partial=bank)
         except Exception as e:
             print(f"  ufcstats UNREACHABLE ({type(e).__name__}) — run on Actions")
             us = {}
-        for k, rec in us.items():
-            # STANCE is a new field, not a hole-fill, so it is written for any
-            # fighter who lacks one — including men who already have a DOB.
-            # It is the raw material for the southpaw angle, which is a listed
-            # blind spot, and it costs nothing extra to keep.
-            if rec.get("stance"):
-                cur = meta.get(k) if isinstance(meta.get(k), dict) else None
-                if cur is not None and not cur.get("stance"):
-                    cur["stance"] = rec["stance"]
-                    stances += 1
-            if k not in missing or not rec.get("dob"):
-                continue
-            if not plausible(rec["dob"], first.get(k)):
-                rejected += 1
-                continue
-            meta[k] = {"name": missing[k], "dob": rec["dob"],
-                       "stance": rec.get("stance"), "_src": "ufcstats"}
-            added["ufcstats"] += 1
-            missing.pop(k)
-            stances += 1 if rec.get("stance") else 0
+        absorb(us)
         print(f"  ufcstats filled {added['ufcstats']} DOBs, {stances} stances")
         json.dump(meta, open(META, "w"), indent=1, sort_keys=True)
 
@@ -488,8 +515,49 @@ def selftest():
     assert parse_detail(blank) == {"dob": None, "stance": None}
     assert parse_detail("<html>nothing here</html>") == {"dob": None,
                                                          "stance": None}
+    # --- mid-pass banking. The whole reason round 2 is being re-fired with a
+    # step timeout is that a wall-clock kill loses everything the pass had
+    # already fetched. That protection is worthless if on_partial never fires,
+    # so drive pull_ufcstats against a fake network and count the callbacks.
+    global _get
+    _real_get = _get
+    names = [f"Fighter{i:04d} Test" for i in range(450)]
+    fake_index = "".join(
+        f'<tr><td><a href="http://ufcstats.com/fighter-details/{i:06x}">'
+        f'{n.split()[0]}</a></td>'
+        f'<td><a href="http://ufcstats.com/fighter-details/{i:06x}">'
+        f'{n.split()[1]}</a></td></tr>'
+        for i, n in enumerate(names))
+    detail = ('<li><i class="b-list__box-item-title">DOB:</i> Jan 02, 1990</li>'
+              '<li><i class="b-list__box-item-title">STANCE:</i> Southpaw</li>')
+
+    def _fake(url, timeout=30):
+        # one letter's index carries every fake fighter; the other 25 are empty
+        if "statistics/fighters" in url:
+            return (fake_index if "char=a" in url else "").encode()
+        return detail.encode()
+
+    _get = _fake
+    try:
+        seen = []
+        out = pull_ufcstats({norm_name(n) for n in names},
+                            log=lambda s: None,
+                            on_partial=lambda o: seen.append(len(o)))
+        assert len(out) == 450, f"fake pull lost rows: {len(out)}"
+        assert seen == [200, 400], f"on_partial did not fire every 200: {seen}"
+        # and it must hand over a GROWING view of the same dict, not a copy of
+        # the first chunk — banking the same 200 rows twice would silently mean
+        # the last 250 were never written on a killed run
+        assert seen[1] > seen[0], "partials are not accumulating"
+        # max_fetch still bounds the crawl, so a capped run stays inside budget
+        assert len(pull_ufcstats({norm_name(n) for n in names},
+                                 log=lambda s: None, max_fetch=10)) == 10
+    finally:
+        _get = _real_get
+
     print("DOB BACKFILL SELFTEST PASS — normalizer mirrors production, "
-          "plausibility gate rejects namesakes, existing DOBs untouched")
+          "plausibility gate rejects namesakes, existing DOBs untouched, "
+          "mid-pass banking fires every 200 details")
     return 0
 
 

@@ -1,1 +1,1 @@
-2026-07-29T15:37:12Z
+round 3 — step timeouts + mid-pass banking + unconditional status commit  2026-07-29T17:13:34Z
