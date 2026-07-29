@@ -41,6 +41,8 @@ Verdict rule unchanged: ROBUST WIN = train win + holdout win + 3/3 periods, on
 the AGE-COMPLETE subset.
 """
 import csv, json, math, os, re, sys
+
+from ufc_gates import read_ceiling
 from collections import defaultdict, deque
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -246,10 +248,27 @@ def ll(feats, co, d0, d1, extra=None, ys=None):
     return (tot / n if n else 0.0), n
 
 
-BASE_GRIDS = {"a": (1.6, 2.0, 2.4, 2.8, 3.2),
-              "c": (-0.30, -0.20, -0.12, -0.06, -0.03, 0.0),
-              "g": (-0.06, -0.04, -0.02, -0.01, 0.0),
-              "L": (-0.30, -0.18, -0.10, -0.05, 0.0, 0.05)}
+# GRIDS WIDENED PAST WHERE THE FIT ACTUALLY LANDS. The originals were a>=1.6
+# and g>=-0.06, and the fit on the age-complete panel lands on BOTH of those
+# values — i.e. on two grid edges at once. An edge means the search stopped at
+# the wall, not at an optimum, and a baseline held back that way manufactures
+# wins for any angle correlated with the under-fitted term.
+#
+# It turned out to be harmless HERE: refitting with these wider grids lands on
+# the identical a=1.6, c=-0.06, g=-0.06, L=-0.05, now with nothing on an edge,
+# and LAYAGE and ACTIV return identical verdicts to five decimals. But that
+# was luck — the true optimum happened to sit exactly on the old wall — and
+# edges() turns that from luck into something the run reports on itself.
+BASE_GRIDS = {"a": (0.6, 0.9, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2),
+              "c": (-0.30, -0.20, -0.12, -0.06, -0.03, 0.0, 0.03),
+              "g": (-0.16, -0.12, -0.09, -0.06, -0.04, -0.02, -0.01, 0.0,
+                    0.02),
+              "L": (-0.45, -0.30, -0.18, -0.10, -0.05, 0.0, 0.05)}
+
+
+def edges(co):
+    """Which baseline coefficients landed on the boundary of their own grid."""
+    return [k for k, g in BASE_GRIDS.items() if co[k] in (min(g), max(g))]
 
 
 def fit_baseline(feats, out=print, ys=None):
@@ -289,21 +308,34 @@ def tune(feats, co, key, grid, ys=None):
     return best
 
 
-def power_ceiling(feats, key, b_true, seed=7):
-    """The most log-likelihood this angle could POSSIBLY buy on this panel.
+def probe_once(feats, key, grid, b_true, seed=7):
+    """One synthetic panel where the angle IS true at b_true.
 
     Takes the real feature walk — real Elo gaps, real ages, real layoffs, the
-    real distribution of the angle itself — and re-rolls only the OUTCOMES so
-    the angle is true at strength b_true. Then runs the identical pipeline:
-    refit the baseline on the synthetic train, score the holdout with and
-    without the term at its true value. No fitted model can beat a model that
-    already knows the answer, so this number is a hard ceiling.
+    real distribution of the angle itself — and re-rolls only the OUTCOMES.
+    Returns three things, and the third is the one that changed:
 
-    Why it matters more here than anywhere: a UFC holdout is ~1,500 bouts of a
-    binary outcome, which is a thin instrument. A measured null of +0.0000
-    against a ceiling of +0.0100 means the angle is dead. The same null against
-    a ceiling of +0.0004 means the experiment could never have seen it, and
-    filing that as 'dead' would be a false negative dressed as a finding.
+      ORACLE  the gain a model handed the true coefficient would get. No
+              fitted model beats a model that already knows the answer, so
+              this is a hard bound.
+      FITTED  the gain the actual tune-and-verdict pipeline recovers.
+      ROBUST  whether that recovery cleared the SAME three-period ship rule
+              the real verdict has to clear.
+
+    ROBUST is the addition. The previous version returned the oracle alone,
+    and the ladder then guessed at detectability with a hard-coded cutoff
+    (c > 0.004) — a constant standing in for a measurement. Whether a panel
+    can see an effect depends on the panel, the term's own distribution and
+    the holdout size together, and no constant knows any of those. Planting
+    the effect and checking whether the pipeline finds it answers the
+    question directly.
+
+    Why the panel matters more here than anywhere: a UFC holdout is ~1,500
+    bouts of a binary outcome, which is a thin instrument. A measured null of
+    +0.0000 against an oracle of +0.0100 means the angle is dead. The same
+    null against an oracle of +0.0004 means the experiment could never have
+    seen it, and filing that as 'dead' is a false negative dressed as a
+    finding.
 
     The baseline is REFIT on the synthetic panel rather than carried over. A
     carried-over fit is mis-specified for the re-rolled outcomes, which would
@@ -323,11 +355,33 @@ def power_ceiling(feats, key, b_true, seed=7):
              + b_true * max(-cl, min(cl, f[key])))
         p = 1.0 / (1.0 + math.exp(-max(-30.0, min(30.0, z))))
         ys.append(1 if rng.random() < p else 0)
-    co, _ = fit_baseline(feats, out=lambda s: None, ys=ys)
+    co, tr_base = fit_baseline(feats, out=lambda s: None, ys=ys)
     h0, h1 = PERIODS[0][0], PERIODS[-1][1]
     base, _ = ll(feats, co, h0, h1, ys=ys)
-    with_, _ = ll(feats, co, h0, h1, extra=(key, b_true), ys=ys)
-    return with_ - base
+    orc, _ = ll(feats, co, h0, h1, extra=(key, b_true), ys=ys)
+    tr, B = tune(feats, co, key, grid, ys=ys)
+    fit_, _ = ll(feats, co, h0, h1, extra=(key, B), ys=ys)
+    wins = 0
+    for p0, p1 in PERIODS:
+        b0, _ = ll(feats, co, p0, p1, ys=ys)
+        v0, _ = ll(feats, co, p0, p1, extra=(key, B), ys=ys)
+        wins += 1 if v0 > b0 else 0
+    robust = 1 if (tr > tr_base and fit_ > base and wins == 3) else 0
+    return orc - base, fit_ - base, robust
+
+
+def probe(feats, key, grid, b_true, seeds=(7, 17, 27)):
+    """Averages over seeds, and returns the RAW robust count.
+
+    Averaged because one Bernoulli draw of ~8,700 bouts is itself a noisy
+    instrument and a ceiling that moves with the seed is not a bound. The
+    robust count is NOT averaged into a rate and thresholded — it is reported
+    as n/N, because "the plant was found in 1 of 3 panels" and "the plant was
+    found in 3 of 3" are different enough facts to deserve different verdicts.
+    """
+    o, fi, rb = zip(*[probe_once(feats, key, grid, b_true, s) for s in seeds])
+    return (sum(o) / len(o), sum(fi) / len(fi), min(o), max(o),
+            sum(rb), len(rb))
 
 
 def experiment(feats, out=print, ceilings=True):
@@ -335,6 +389,13 @@ def experiment(feats, out=print, ceilings=True):
     h0, h1 = PERIODS[0][0], PERIODS[-1][1]
     base_h, nh = ll(feats, co, h0, h1)
     out(f"baseline HOLDOUT {base_h:+.5f} (n={nh})")
+    ed = edges(co)
+    if ed:
+        out(f"!! BASELINE ON A GRID EDGE: {','.join(ed)} — the search stopped "
+            "at the wall, not at an optimum, so the baseline is handicapped "
+            "and every angle correlated with those terms is being handed "
+            "credit that is not its own. WIDEN THE GRID BEFORE READING ANY "
+            "VERDICT BELOW.")
     results = {}
     for label, key, grid in ANGLES:
         tr, B = tune(feats, co, key, grid)
@@ -364,33 +425,35 @@ def experiment(feats, out=print, ceilings=True):
             # largest magnitude available.
             b_fit = results[label][3]
             side = [b for b in grid if (b < 0) == (b_fit < 0)] or list(grid)
-            b_gen = max(side, key=abs)
-            # average over re-rolls: one Bernoulli draw of ~8,700 bouts is
-            # itself a noisy instrument, and a ceiling that moves with the seed
-            # is not a bound. Three seeds is cheap and kills most of the wobble.
-            cs = [power_ceiling(feats, key, b_gen, seed=s)
-                  for s in (7, 17, 27, 37, 47)]
-            c = sum(cs) / len(cs)
+            # WALK DOWN FROM THE STRONGEST PLANT UNTIL THE PROBE IS
+            # INFORMATIVE. Planting at the grid maximum buys the most power in
+            # principle, but for a term correlated with the baseline it buys
+            # the opposite: the refit baseline absorbs a large plant, the
+            # oracle comes out NEGATIVE, and the ladder then reads any positive
+            # measurement as noise. That is what happened to LAYAGE — layoff x
+            # age is a product of two baseline main effects, and once the
+            # grids were widened the baseline ate a b=-0.40 plant whole.
+            #
+            # So try the largest magnitude first and step down to the next one
+            # whenever the oracle is not positive. The strength that survives
+            # is the strongest plant this baseline CANNOT absorb, which is the
+            # honest ceiling for a term of this shape.
+            b_gen, o, fi, olo, ohi, n_rob, n_seed = None, 0.0, 0.0, 0.0, 0.0, 0, 0
+            for cand in sorted(side, key=abs, reverse=True)[:4]:
+                b_gen = cand
+                o, fi, olo, ohi, n_rob, n_seed = probe(feats, key, grid, cand)
+                if o > 0:
+                    break
+                out(f"{label:26s}   (plant b={cand:+.2f} absorbed by the "
+                    f"baseline, oracle {o:+.5f} — stepping down)")
             got = results[label][0]
-            # Four readings, not two. The first draft could only say "noise" or
-            # "dead", so an angle that WON while sitting well under its ceiling
-            # — the one outcome the ceiling exists to certify — got printed as
-            # dead. Order matters: reach-the-ceiling first, then win, then the
-            # two flavours of null.
             won = results[label][2] == "ROBUST WIN" and got > 0
-            if got >= c:
-                read = "MEASURED >= CEILING: noise by construction"
-            elif got >= min(cs):
-                read = "inside the ceiling's own seed spread: unproven"
-            elif won:
-                read = f"LIVE: robust win at {100.0 * got / c:.0f}% of ceiling"
-            elif c > 0.004:
-                read = "dead: the panel could see it and did not"
-            else:
-                read = "CANNOT BE SEEN AT THIS SAMPLE - do not bury"
-            out(f"{label:26s} ceiling(b={b_gen:+.2f}) {c:+.5f} "
-                f"[{min(cs):+.5f}..{max(cs):+.5f}]  "
-                f"measured {got:+.5f}   {read}")
+            read = read_ceiling(got, won, o, olo, fi, n_rob, n_seed)
+            out(f"{label:26s} oracle(b={b_gen:+.2f}) {o:+.5f} "
+                f"[{olo:+.5f}..{ohi:+.5f}]  fitted {fi:+.5f}  "
+                f"plant recovered {n_rob}/{n_seed}  "
+                f"measured {got:+.5f}\n{'':26s}   -> {read}")
+            c = o
             results[label] = results[label] + (c,)
     return results
 
@@ -495,13 +558,20 @@ def selftest():
     res0 = experiment(walk_features(nb, na_), out=lambda s: None, ceilings=False)
     assert res0[LK][0] < d_la / 3, f"null suspicious: {res0[LK][0]} vs {d_la}"
 
-    # the ceiling must exceed what was actually measured on the panel where the
+    # the oracle must exceed what was actually measured on the panel where the
     # effect is REAL — a ceiling below its own measurement is not a ceiling
-    ceil = power_ceiling(walk_features(live, live_ages), "layage_d", 0.40)
+    LG = dict((k, g) for _, k, g in ANGLES)["layage_d"]
+    ceil, _, rob, ns = (lambda t: (t[0], t[1], t[4], t[5]))(
+        probe(walk_features(live, live_ages), "layage_d", LG, 0.40,
+              seeds=(7,)))
     assert ceil > d_la * 0.5, f"ceiling {ceil} implausibly under measured {d_la}"
+    assert rob == ns, (
+        f"a planted layage effect at b=0.40 was recovered only {rob}/{ns} on "
+        "the panel that was BUILT to contain it — if the probe cannot find a "
+        "plant that large, every 'DEAD' verdict it issues is unsupported")
     # and on the null panel the ceiling must still be positive: the ceiling
     # describes the PANEL's capacity to show an effect, not whether one exists
-    ceil0 = power_ceiling(walk_features(nb, na_), "layage_d", 0.40)
+    ceil0 = probe(walk_features(nb, na_), "layage_d", LG, 0.40, seeds=(7,))[0]
     assert ceil0 > 0, f"ceiling collapsed on a null panel: {ceil0}"
 
     # leak proof: flip every outcome after a cutoff on a DEEP COPY; features

@@ -434,32 +434,11 @@ def probe(feats, key, grid, b_true, seeds=(7, 17, 27), with_reach=False):
             sum(rb), len(rb))
 
 
-def read_ceiling(got, won, o, olo, fi, n_rob, n_seed):
-    """Turn a ceiling into a verdict. A FUNCTION, so the selftest can pin it.
-
-    This ladder has been gotten wrong three separate times — twice by testing
-    "too small to see" BEFORE "did it win", which prints real wins as invisible,
-    and once by using a hard-coded oracle cutoff to stand in for detectability.
-    That cutoff mislabelled MLB's LOAD: oracle +0.00038, a hair under the line,
-    printed "cannot be seen" on the very run where the fitted pipeline recovered
-    a PLANTED load effect robustly in 3 of 3 seeds. Detectability is measured,
-    never assumed: n_rob/n_seed is the count of seeds in which a planted,
-    true-by-construction effect actually survived the full ship rule, and that
-    is the direct answer to "could this panel have seen it".
-    """
-    if got >= o:
-        return "measured >= ORACLE: noise by construction"
-    if got >= olo:
-        return ("won but sits inside the oracle's own seed spread: "
-                "UNPROVEN, needs a placebo" if won else
-                "inside the oracle's seed spread: unreadable")
-    if won and got >= fi:
-        return f"LIVE: robust win at {100.0 * got / o:.0f}% of oracle"
-    if n_rob * 2 < n_seed:
-        return (f"STILL CANNOT BE SEEN - do not bury (a planted effect "
-                f"was itself only recovered {n_rob}/{n_seed})")
-    return (f"DEAD: a planted effect of this size was recovered "
-            f"{n_rob}/{n_seed}, so a real one would have shown")
+# The ceiling ladder now lives in ufc_gates.py, as gate 1's reader, next to
+# gates 2 and 3. It was duplicated here and re-derived by hand in a scratch
+# script for angles3, which is how a ladder that has already been gotten wrong
+# three times acquires a fourth variant. One copy, one selftest.
+from ufc_gates import read_ceiling  # noqa: E402
 
 
 def experiment(feats, out=print, ceilings=True, with_reach=False,
@@ -497,9 +476,24 @@ def experiment(feats, out=print, ceilings=True, with_reach=False,
             # negative "ceiling" and then labels a genuine win as noise.
             b_fit = results[label][3]
             side = [b for b in grid if (b < 0) == (b_fit < 0)] or list(grid)
-            b_gen = max(side, key=abs)
-            o, fi, olo, ohi, n_rob, n_seed = probe(
-                feats, key, grid, b_gen, seeds=seeds, with_reach=with_reach)
+            # WALK DOWN FROM THE STRONGEST PLANT UNTIL THE PROBE IS
+            # INFORMATIVE. The oracle refits the baseline on the synthetic
+            # panel, so a plant that the baseline can ABSORB comes back with a
+            # negative oracle — the refit carries the effect through inflated
+            # main-effect coefficients, and adding the true term on top then
+            # double-counts and hurts. Read literally that makes any positive
+            # measurement look like noise. It nearly buried LAYAGE in batch 3.
+            # The strength that survives this walk is the strongest plant the
+            # baseline CANNOT absorb, which is the honest bound for the term.
+            b_gen, o, fi, olo, ohi, n_rob, n_seed = None, 0.0, 0.0, 0.0, 0.0, 0, 0
+            for cand in sorted(side, key=abs, reverse=True)[:4]:
+                b_gen = cand
+                o, fi, olo, ohi, n_rob, n_seed = probe(
+                    feats, key, grid, cand, seeds=seeds, with_reach=with_reach)
+                if o > 0:
+                    break
+                out(f"{label:30s}   (plant b={cand:+.2f} absorbed by the "
+                    f"baseline, oracle {o:+.5f} — stepping down)")
             got = results[label][0]
             won = results[label][2] == "ROBUST WIN" and got > 0
             read = read_ceiling(got, won, o, olo, fi, n_rob, n_seed)
