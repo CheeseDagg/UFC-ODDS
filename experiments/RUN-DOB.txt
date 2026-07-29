@@ -1,38 +1,49 @@
-round 7 — 2026-07-29  (the one that should actually pull)
+round 8 — the stance sweep, and reach batch 4
 
-Rounds 3 through 6 walked this down one observation at a time, and each round
-bought exactly one fact because a commit on main is the only channel back:
+WHAT ROUND 7 GOT WRONG, AND WHY THIS ROUND EXISTS.
 
-  round 3  the scrape produced nothing, and for the first time said so
-  round 4  the 26 index pages fetch cleanly and parse to ZERO — not a network
-           problem, and the http:// -pinned regex was not it either
-  round 5  it is a JS interstitial: 2,994 bytes, "Checking your browser…",
-           and the cookie jar came back holding nothing
-  round 6  read the parameters off the page
+Round 7 pushed DOB coverage to 97.2% and picked up 1,102 stances along the
+way, for free, because ufcstats serves stance on the same detail page as the
+date of birth. That looked like a bonus. It was a selection bug wearing a
+bonus's clothes.
 
-The block is a SHA-256 proof of work:
+The only fighters round 7 had a reason to fetch were the ones MISSING a DOB.
+After six rounds of backfill that set is not a random sample of the roster —
+it is the obscure and the long-retired, the men whose pages nobody had needed
+yet. So stance was harvested from precisely the population a southpaw angle
+cannot be tested on. Overall stance coverage came out at 12.9%. On the
+holdout — bouts from 2023 on, the only bouts that decide anything — it came
+out at 1.0%, which is 18 bouts. That is not a thin panel. It is no panel.
 
-    nonce  = a fresh 16-hex string, per response
-    target = "0" * 2, the difficulty, stated in the page
-    find the smallest n where sha256(f"{nonce}:{n}") starts with target
-    POST nonce=<nonce>&n=<n>, form-encoded, to /__c  -> sets the cookie
-    re-request the original URL
+This round visits the ~1,280 fighters active since 2015 who have a DOB and no
+stance. Those are men round 7 would never have touched, by construction,
+because their DOB was already banked. Same request volume as round 7
+(~1,300), so it fits inside the existing 38-minute step budget, and
+on_partial still banks to disk every 200 details — a wall-clock kill keeps
+everything already paid for.
 
-At difficulty 2 that is about 256 hashes. Microseconds in hashlib. The block
-was never about compute — it was about being a browser, and the old client
-failed it three ways at once: it announced itself as a bot, it threw away the
-cookie the toll buys, and it had no way to run the arithmetic.
+The run reports HOLDOUT stance coverage separately and in full, not tailed.
+Overall coverage is not a substitute for it: after round 7 the two numbers
+were 12.9% and 1.0%, and the first is the one that would have been reported.
 
-Round 7 pays the toll once on the events page and rides the cookie through the
-26 index pages and ~1,270 detail pages. Nothing is hard-coded: the nonce, the
-difficulty and the POST path are all parsed out of the page, because the nonce
-is per-response and the difficulty is the site's to raise. If the shape ever
-changes, the solver returns None and the run reports "challenge I could not
-solve" — a legible failure instead of another silent zero.
+ALSO IN THIS ROUND: reach angles, batch 4.
 
-The selftest runs the fake site BEHIND the challenge, so it exercises the
-grind, the POST and the retry, and asserts the toll is paid exactly once
-across 1,300 requests rather than once per request.
+Five terms, run twice. Raw reach difference; ape index difference; reach as a
+prior weighted toward fighters Elo has barely seen; the reach ENVIRONMENT a
+man has been fighting into; and reach x age.
 
-If coverage moves off 4223/8686, the angles-2 re-run in this same job finally
-gets a decisive test instead of a 47%-complete age control.
+The premise is an absorption argument that also explains why nobody should
+have expected a reach main effect to show. Elo scores a bout on the rating
+difference. If the truth is z = beta * (reach_i - reach_j), then
+r_i = beta * reach_i + skill_i reproduces it exactly, and ratings converge
+there with no help from anyone. Elo can absorb any per-fighter DIFFERENCE
+term, not merely a fixed offset. So a null on raw reach says almost nothing
+about whether reach matters in a cage — it says Elo already knows. Only
+terms that vary WITHIN a career, or that key on where Elo is not yet
+informed, can leave a residual. Raw reach and ape index are in the batch as
+CONTROLS: they are the terms that make the other three readable.
+
+The second pass carries raw reach in the baseline. Any interaction built on
+reach will happily impersonate the reach main effect if that main effect is
+not already spoken for, and an interaction judged without its own main
+effect is the main effect in a wig.

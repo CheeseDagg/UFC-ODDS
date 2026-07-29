@@ -219,6 +219,50 @@ def load_meta():
     return json.load(open(META)) if os.path.exists(META) else {}
 
 
+def last_bout_dates(path=None):
+    """{norm_name: latest bout date}. Needed because the stance sweep wants to
+    spend its request budget on men who are still fighting."""
+    out = {}
+    with open(path or BOUTS) as f:
+        rd = csv.DictReader(f)
+        cols = [c for c in ("fighter", "opp", "opponent", "a", "b", "name")
+                if c in rd.fieldnames]
+        dcol = next((c for c in ("date", "event_date")
+                     if c in rd.fieldnames), None)
+        for r in rd:
+            d = (r.get(dcol) or "")[:10] if dcol else ""
+            for c in cols:
+                nm = (r.get(c) or "").strip()
+                if nm and d:
+                    k = norm_name(nm)
+                    if d > out.get(k, ""):
+                        out[k] = d
+    return out
+
+
+def stance_gaps(disp, meta, last, since):
+    """Fighters we should visit for STANCE even though their DOB is already in.
+
+    Round 7 filled DOBs and picked up 1,102 stances for free — but only for the
+    fighters it had a reason to fetch, which was exactly the set MISSING a DOB.
+    Those are the obscure and the long-retired. The result was stance coverage
+    of 12.9% overall and 1.0% on the holdout: every modern fighter already had
+    an ESPN date of birth, so nobody ever opened his ufcstats page. Stance was
+    harvested from precisely the men the southpaw angle cannot be tested on.
+
+    `since` keeps the request budget on fighters who are still active, because
+    the holdout is what a stance angle has to be decided on.
+    """
+    out = set()
+    for k in disp:
+        if last.get(k, "") < since:
+            continue
+        v = meta.get(k)
+        if not (isinstance(v, dict) and v.get("stance")):
+            out.add(k)
+    return out
+
+
 def dob_index(meta):
     """{norm: dob} accepting both the cache key and the stored display name."""
     out = {}
@@ -520,6 +564,12 @@ def main():
     have = dob_index(meta)
     missing = {k: v for k, v in disp.items() if k not in have}
     print(f"missing DOB for {len(missing)} of {len(disp)} fighters")
+    gaps = stance_gaps(disp, meta, last_bout_dates(),
+                       os.environ.get("STANCE_SINCE", "2015-01-01"))
+    print(f"missing STANCE for {len(gaps)} fighters active since "
+          f"{os.environ.get('STANCE_SINCE', '2015-01-01')} "
+          f"({len(gaps - set(missing))} of them already have a DOB and would "
+          f"never have been fetched)")
     print("BEFORE: ", end="")
     report(meta)
 
@@ -568,7 +618,15 @@ def main():
             print(f"  banked: {added['ufcstats']} DOBs so far")
 
         try:
-            us = pull_ufcstats(set(missing),
+            # One set, not two passes: pull_ufcstats walks the alphabetical
+            # index, so DOB holes and stance holes are interleaved and neither
+            # gets priority if the budget runs out. That is acceptable HERE
+            # only because DOB coverage is already 97.2% — there are ~250 bouts
+            # of holes left against ~1,280 stance holes — and because
+            # on_partial banks to disk every 200 details, so a wall-clock kill
+            # keeps everything already paid for. If DOB coverage were still low
+            # this would need to be ordered.
+            us = pull_ufcstats(set(missing) | gaps,
                                max_fetch=int(os.environ.get("UFCSTATS_MAX", "0"))
                                or None,
                                on_partial=bank)
@@ -635,6 +693,28 @@ def selftest():
     m = {"joe blow": {"name": "Joe Blow", "dob": "1985-05-05"}}
     assert dob_index(m)["joe blow"] == "1985-05-05"
     assert norm_name("Joe Blow") in dob_index(m)
+
+    # --- the stance sweep. THE BUG THIS ENCODES: round 7 harvested 1,102
+    # --- stances and still left the holdout at 1.0% coverage, because the only
+    # --- fighters it fetched were the ones missing a DOB. A man with a DOB and
+    # --- no stance was invisible to the whole pass. He must not be.
+    disp = {"has both": "Has Both", "dob no stance": "Dob No Stance",
+            "neither": "Neither", "retired": "Retired"}
+    meta = {"has both": {"dob": "1990-01-01", "stance": "Orthodox"},
+            "dob no stance": {"dob": "1991-01-01"},
+            "retired": {"dob": "1970-01-01"}}
+    last = {"has both": "2024-01-01", "dob no stance": "2024-01-01",
+            "neither": "2024-01-01", "retired": "2001-01-01"}
+    g = stance_gaps(disp, meta, last, "2015-01-01")
+    assert "dob no stance" in g, (
+        "a fighter with a DOB and no stance was skipped — that is exactly the "
+        "population that left the holdout at 1.0% stance coverage")
+    assert "neither" in g
+    assert "has both" not in g, "re-fetching a known stance wastes budget"
+    assert "retired" not in g, "the since-cutoff is not filtering anyone"
+    assert stance_gaps(disp, meta, last, "2000-01-01") == g | {"retired"}
+    # a fighter with no bout date at all must not silently pass the cutoff
+    assert stance_gaps({"ghost": "Ghost"}, {}, {}, "2015-01-01") == set()
 
     # --- ufcstats parsers, against markup shaped like the real pages --------
     idx = '''

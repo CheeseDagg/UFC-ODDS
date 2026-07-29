@@ -64,6 +64,14 @@ jobs:
         working-directory: Github
         env:
           ESPN_MAX: "300"
+          # Round 7 filled DOBs to 97.2% and picked up 1,102 stances on the
+          # way — but only for fighters it had a reason to fetch, which was
+          # the set MISSING a DOB: the obscure and the long-retired. Holdout
+          # stance coverage came out at 1.0%, i.e. 18 bouts, which is no panel
+          # at all. This sweep visits the ~1,280 men active since 2015 who have
+          # a DOB and no stance, which is the population a southpaw angle would
+          # actually be decided on.
+          STANCE_SINCE: "2015-01-01"
         run: |
           mkdir -p ../logs
           python ufc_dob_backfill.py 2>&1 | tail -c 60000 | tee ../logs/backfill.txt
@@ -90,6 +98,55 @@ jobs:
           mkdir -p ../logs
           python ufc_angles2_experiment.py 2>&1 | tail -c 40000 | tee ../logs/angles.txt
 
+      - name: Stance coverage after the sweep
+        id: stance
+        if: always()
+        continue-on-error: true
+        working-directory: Github
+        # Coverage on the HOLDOUT is the only number that decides whether a
+        # stance angle is testable. Overall coverage is not a substitute:
+        # after round 7 it read 12.9% overall and 1.0% on the holdout, and the
+        # first of those two numbers is the one that would have been reported.
+        run: |
+          mkdir -p ../logs
+          python - <<'PY' 2>&1 | tee ../logs/stance.txt
+          import json, csv, re
+          def norm(n):
+              n = (n or "").strip().lower().replace(".", "").replace("'", "")
+              return re.sub(r"\s+", " ", n.replace("-", " "))
+          M = {norm(k): v for k, v in json.load(
+              open("fighter_meta_cache.json")).items()}
+          rows = list(csv.DictReader(open("data/fighter_bouts.csv")))
+          seen, bouts = set(), []
+          for r in rows:
+              k = (r["date"],) + tuple(sorted([r["fighter"], r["opp"]]))
+              if k in seen or r["won"] not in ("0", "1"):
+                  continue
+              seen.add(k); bouts.append(r)
+          def ok(n):
+              v = M.get(norm(n)); return bool(v and v.get("stance"))
+          for tag, bs in (("ALL", bouts),
+                          ("HOLDOUT", [b for b in bouts
+                                       if b["date"] >= "2023-01-01"])):
+              both = sum(1 for b in bs if ok(b["fighter"]) and ok(b["opp"]))
+              print(f"{tag}: both stances known {both}/{len(bs)} "
+                    f"({100.0 * both / max(len(bs), 1):.1f}%)")
+          from collections import Counter
+          print(Counter(v.get("stance") for v in M.values() if v.get("stance")))
+          PY
+
+      - name: Reach angles (batch 4)
+        id: angles4
+        continue-on-error: true
+        timeout-minutes: 12
+        working-directory: Github
+        env:
+          VERDICT_OUT: ../experiments/UFC-ANGLES4-VERDICT.md
+        run: |
+          mkdir -p ../logs
+          python ufc_angles4_experiment.py --selftest 2>&1 | tee ../logs/angles4.txt
+          python ufc_angles4_experiment.py 2>&1 | tail -c 40000 | tee -a ../logs/angles4.txt
+
       - name: Write run status
         if: always()
         run: |
@@ -107,15 +164,30 @@ jobs:
             echo "  backfill  ${{ steps.backfill.outcome }}"
             echo "  after     ${{ steps.after.outcome }}"
             echo "  angles    ${{ steps.angles.outcome }}"
+            echo "  stance    ${{ steps.stance.outcome }}"
+            echo "  angles4   ${{ steps.angles4.outcome }}"
             echo ""
             echo "coverage BEFORE:"; sed 's/^/  /' logs/before.txt 2>/dev/null || echo "  (step did not run)"
             echo "coverage AFTER:";  sed 's/^/  /' logs/after.txt  2>/dev/null || echo "  (step did not run)"
+            echo ""
+            # Stance coverage goes in FULL, not tailed. It is four lines, and it
+            # is the number that decides whether the southpaw angle is testable
+            # at all — truncating it to save space would defeat the sweep.
+            echo "--- stance coverage ---"
+            cat logs/stance.txt 2>/dev/null || echo "(no stance log)"
             echo ""
             echo "--- backfill tail (last 200 lines) ---"
             tail -n 200 logs/backfill.txt 2>/dev/null || echo "(no backfill log — the step never produced output)"
             echo ""
             echo "--- angles tail (last 40 lines) ---"
             tail -n 40 logs/angles.txt 2>/dev/null || echo "(no angles log)"
+            echo ""
+            # 120 lines, not 40: batch 4 prints a five-angle ladder with a
+            # ceiling probe per angle across TWO passes, and the second pass
+            # (raw reach in the baseline) is the one that decides. A 40-line
+            # tail would cut off exactly the half that matters.
+            echo "--- reach angles (batch 4) tail (last 120 lines) ---"
+            tail -n 120 logs/angles4.txt 2>/dev/null || echo "(no angles4 log)"
           } > experiments/DOB-RUN-STATUS.md
           cat experiments/DOB-RUN-STATUS.md
 
@@ -130,6 +202,7 @@ jobs:
           # same from a machine that can only read main.
           for f in Github/fighter_meta_cache.json \
                    experiments/UFC-ANGLES2-VERDICT-WIDENED.md \
+                   experiments/UFC-ANGLES4-VERDICT.md \
                    experiments/DOB-RUN-STATUS.md; do
             git add "$f" 2>/dev/null || true
           done
