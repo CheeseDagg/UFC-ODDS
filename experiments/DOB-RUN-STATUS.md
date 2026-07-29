@@ -1,8 +1,8 @@
 # DOB backfill run status
 
-run    30474374434  attempt 3
-sha    b2653214489a1e0f67b4d4c786dd146edbc18abb
-when   2026-07-29T17:17:05Z
+run    30475177492  attempt 4
+sha    53924472c5717f205e4f3fcd95d6c671e1d24eda
+when   2026-07-29T17:27:30Z
 
 step outcomes (failure here is the whole point of this file):
   selftest  success
@@ -20,6 +20,58 @@ coverage AFTER:
 missing DOB for 1245 of 2678 fighters
 BEFORE: fighters: 1433/2678 with DOB  |  bouts with BOTH ages: 4223/8686 (48.6%)
 ufcstats pass
+  index 'a' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'b' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'c' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'd' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'e' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'f' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'g' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'h' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'i' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'j' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'k' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'l' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'm' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'n' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'o' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'p' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'q' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'r' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 's' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 't' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'u' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'v' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'w' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'x' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'y' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
+  index 'z' parsed 0 rows from 2994 chars, 0 'fighter-details' mentions
+    head: <!doctype html><html><head><meta charset="utf-8"> <title>Loading…</title><meta name="robots" content="noindex"> <style>body{font-family:sans-serif;color:#666;text-align:center;margin-top:25vh}</style>
   ufcstats index: 0 fighters enumerated
   0 of them are names we are missing — fetching details
   ufcstats filled 0 DOBs, 0 stances
