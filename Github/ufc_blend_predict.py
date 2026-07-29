@@ -87,7 +87,23 @@ FEATS_B = ["elo", "strike_ema", "grap_ema", "ctrl_ema", "won_ema",
 # periods) AND vs Elo+age (+0.0052, 3/3) — damage accrual is real signal
 # beyond age. (Win-streak momentum tested same day: survives Elo-only but
 # NOT age-adjusted robustly -> not shipped.)
-FEATS_A = FEATS_B + ["age_diff", "age2_diff"]
+FEATS_A = FEATS_B + ["age_diff", "age2_diff", "layage_diff"]
+# "layage_diff" = capped layoff in YEARS x (age - 30), differenced. Validated
+# 2026-07-29 (ufc_angles3_experiment + ufc_layage_gate): holdout +0.00213 LL
+# on the age-complete subset, 3/3 periods, against a +0.00645 power ceiling,
+# 0/24 shuffled placebos firing the ship rule, and the effect concentrates
+# where its inputs live (3.4x stronger per bout on long-gap bouts; 3/3 with a
+# fighter 33+ vs 2/3 when both are under 31). Time off costs an old fighter
+# more than a young one. It sits in FEATS_A only, which is exactly right: it
+# is undefined without both DOBs, and model A is the both-DOBs model.
+# NOT redundant with "dsl": dsl is log-days-since-last for each man
+# separately, a main effect that charges the same penalty at 24 and at 38.
+# This is the interaction, and its main effect is already in the baseline —
+# an interaction tested without its main effect is just the main effect in a
+# costume, so both belong or neither reading means anything.
+LAY_CAP_Y = 2.0        # years; past this it is a comeback, not a layoff
+AGE_PIVOT = 30.0       # where "young" turns into "old" for the interaction
+LAYAGE_SCALE = 5.0     # keeps the term on roughly the same scale as the rest
 
 
 def norm_name(name):
@@ -214,6 +230,33 @@ def _age_terms(dob1, dob2, fight_date):
     return [a1 - a2, (a1 - 28.0) ** 2 - (a2 - 28.0) ** 2]
 
 
+def _age_block(st1, st2, dob1, dob2, fight_date):
+    """The full model-A tail: [age_diff, age2_diff, layage_diff].
+
+    Returned as one block on purpose. There are two call sites — the training
+    pass and the card-pricing pass — and the failure mode of adding a feature
+    is remembering one of them, which silently trains on a different vector
+    than it prices with. One function, one place to change.
+
+    A debutant has no layoff at all; charging him 'fought yesterday' would be
+    the exact opposite of the truth, so the interaction is switched OFF (0.0)
+    rather than guessed whenever either man has no prior fight. That mirrors
+    the experiment, where the term is defined only when both layoffs are real.
+    """
+    ages = _age_terms(dob1, dob2, fight_date)
+    if st1.last is None or st2.last is None:
+        return ages + [0.0]
+
+    def _lay(st):
+        return min(max((fight_date - st.last).days, 0) / 365.25, LAY_CAP_Y)
+
+    a1 = (fight_date - dob1).days / 365.25
+    a2 = (fight_date - dob2).days / 365.25
+    lay = (_lay(st1) * (a1 - AGE_PIVOT)
+           - _lay(st2) * (a2 - AGE_PIVOT)) / LAYAGE_SCALE
+    return ages + [lay]
+
+
 def build_state_and_data(bouts_csv, dobs):
     """One chronological pass: emit leak-free training rows, update state.
     Returns (state, XA, yA, XB, yB) — A rows only where both corners have DOB."""
@@ -232,7 +275,8 @@ def build_state_and_data(bouts_csv, dobs):
         yb.append(fg["yA"])
         dA, dB = dobs.get(norm_name(A)), dobs.get(norm_name(B))
         if dA and dB:
-            XA.append(x + _age_terms(dA, dB, fg["date"]))
+            # sA/sB are still PRE-update here, so .last is the previous fight
+            XA.append(x + _age_block(sA, sB, dA, dB, fg["date"]))
             ya.append(fg["yA"])
         # ---- update AFTER scoring (leak-free) ----
         eA = 1.0 / (1.0 + 10.0 ** ((sB.elo - sA.elo) / ELO_SCALE))
@@ -326,7 +370,7 @@ def predict_card(state, pred_a, pred_b, dobs, values, cdate):
         d1, d2 = dobs.get(norm_name(n1)), dobs.get(norm_name(n2))
         if d1 and d2 and pred_a is not None:
             model = "A"
-            p1 = pred_a(x + _age_terms(d1, d2, fdate))
+            p1 = pred_a(x + _age_block(state[n1], state[n2], d1, d2, fdate))
         else:
             model = "B"
             p1 = pred_b(x)
@@ -403,8 +447,49 @@ def run(bouts_csv=BOUTS_CSV, meta_path=META_CACHE, parsed_json=PARSED_ODDS,
 # SELFTEST — offline, synthetic, temp dirs; never touches production paths
 # ---------------------------------------------------------------------------
 
+def _selftest_layage():
+    """Direct unit checks on the layoff-x-age term.
+
+    Worth doing separately from the end-to-end pass because the end-to-end
+    pass would happily go green with this term stuck at 0.0 for every bout —
+    a dead feature does not break a pipeline, it just quietly stops earning.
+    """
+    class _S:
+        def __init__(self, last):
+            self.last = last
+
+    fd = dt.date(2024, 1, 1)
+    old = dt.date(1986, 1, 1)     # 38 at fight date
+    young = dt.date(2000, 1, 1)   # 24 at fight date
+    fresh, rusty = _S(dt.date(2023, 11, 1)), _S(dt.date(2022, 6, 1))
+
+    # a debut on either side switches the interaction off, not to some guess
+    assert _age_block(_S(None), fresh, old, young, fd)[2] == 0.0
+    assert _age_block(fresh, _S(None), old, young, fd)[2] == 0.0
+
+    # an old man off a long layoff, against a fresh young man: the term must be
+    # POSITIVE for corner 1 so that the shipped negative coefficient penalises
+    # him. If this ever flips sign the model would reward ring rust.
+    assert _age_block(rusty, fresh, old, young, fd)[2] > 0.0
+    # the same layoff on a YOUNG man must cost less than on an old one
+    a = _age_block(rusty, fresh, old, young, fd)[2]
+    b = _age_block(rusty, fresh, young, young, fd)[2]
+    assert a > b, f"layoff not more costly with age: {a} vs {b}"
+    # mirror antisymmetry: swapping corners must negate the term exactly, or
+    # the model is not the mirror-symmetric thing the rest of the file assumes
+    m1 = _age_block(rusty, fresh, old, young, fd)[2]
+    m2 = _age_block(fresh, rusty, young, old, fd)[2]
+    assert abs(m1 + m2) < 1e-12, f"not antisymmetric: {m1} vs {m2}"
+    # and the cap must bite: 8 years out cannot price worse than 3 years out,
+    # because past the cap it is a comeback story, not a rust story, and an
+    # uncapped term would let one 15-year-gap novelty bout dominate the fit
+    assert (_age_block(_S(dt.date(2016, 1, 1)), fresh, old, young, fd)[2]
+            == _age_block(_S(dt.date(2021, 1, 1)), fresh, old, young, fd)[2])
+
+
 def selftest():
     import tempfile
+    _selftest_layage()
     tmp = tempfile.mkdtemp(prefix="ufc_blend_selftest_")
     today = dt.date.today()
     card_date = (today - dt.timedelta(days=3)).isoformat()
