@@ -488,6 +488,22 @@ def _update_state(st, row, won):
 ELO_K = 24.0
 ELO_SCALE = 400.0
 
+# AGE HINGE KNOTS. The wide-panel re-read found the fitted quadratic peaking at
+# -15.5 years against an observed range of 21.9-41.0, i.e. the "age curve" is a
+# straight decline over every age anyone actually fights at, and the quadratic
+# term buys -0.0002 Brier over a plain linear one. So the question the
+# quadratic was asked to answer — does aging ACCELERATE — is still open, and a
+# hinge asks it in the one shape the data could actually show: flat-ish, then a
+# steeper slope past a knot. The knots are spread wide on purpose. A knot that
+# wins at the EDGE of this list is not an estimate, it is a censored one; the
+# list runs from below the youngest plausible decline to past where the panel
+# thins out, so a winner in the interior is a real interior optimum.
+HINGE_KNOTS = (26.0, 29.0, 32.0, 35.0, 38.0)
+
+
+def hinge_col(k):
+    return "age_h%d" % int(k)
+
 
 def build_dataset(fights, meta=None):
     """Walk chronologically, emitting one leak-free example per fight.
@@ -514,6 +530,16 @@ def build_dataset(fights, meta=None):
     F = {k: [] for k in feat_names}
     age_diff, age2_diff, reach_diff = [], [], []
     has_meta = []
+    # has_dob is the WIDE panel: both DOBs known, reach irrelevant. When this
+    # file was written, age and reach were being tested together and a single
+    # joint mask was the honest choice. Reach has since been tested four more
+    # ways (batch 4) and is dead, so requiring it to score AGE now throws away
+    # half the panel to control for a feature that does nothing. The DOB
+    # backfill took DOB coverage to 97% while reach sat at 46%, which means
+    # the joint mask — not the data — is what still reports "46.1% coverage".
+    has_dob = []
+    obs_ages = []
+    hinge = {k: [] for k in HINGE_KNOTS}
     Y, DATES = [], []
 
     for fg in fights:
@@ -536,22 +562,31 @@ def build_dataset(fights, meta=None):
         # ---- treatment: age (from DOB) + reach ----
         mA = meta.get(norm_name(A))
         mB = meta.get(norm_name(B))
-        ok = (mA and mB and mA.get("dob") and mB.get("dob") and
-              mA.get("reach") and mB.get("reach"))
-        if ok:
+        dob_ok = bool(mA and mB and mA.get("dob") and mB.get("dob"))
+        ok = bool(dob_ok and mA.get("reach") and mB.get("reach"))
+        # AGE COLUMNS ARE FILLED ON THE WIDE PANEL, NOT THE JOINT ONE. This is
+        # safe for the existing joint analysis by construction: has_meta is a
+        # SUBSET of has_dob, and every joint read masks by has_meta, so rows
+        # that light up here and not there are never seen by it.
+        if dob_ok:
             ageA = (fg["date"] - mA["dob"]).days / 365.25
             ageB = (fg["date"] - mB["dob"]).days / 365.25
             # center at 28 so linear & quadratic terms are near-orthogonal
             cA, cB = ageA - 28.0, ageB - 28.0
             age_diff.append(cA - cB)
             age2_diff.append(cA * cA - cB * cB)
-            reach_diff.append(float(mA["reach"]) - float(mB["reach"]))
-            has_meta.append(True)
+            for k in HINGE_KNOTS:
+                hinge[k].append(max(ageA - k, 0.0) - max(ageB - k, 0.0))
+            obs_ages.append(ageA)
+            obs_ages.append(ageB)
         else:
             age_diff.append(0.0)
             age2_diff.append(0.0)
-            reach_diff.append(0.0)
-            has_meta.append(False)
+            for k in HINGE_KNOTS:
+                hinge[k].append(0.0)
+        reach_diff.append(float(mA["reach"]) - float(mB["reach"]) if ok else 0.0)
+        has_meta.append(ok)
+        has_dob.append(dob_ok)
 
         Y.append(fg["yA"])
         DATES.append(fg["date"])
@@ -568,6 +603,10 @@ def build_dataset(fights, meta=None):
     ds["age2_diff"] = np.asarray(age2_diff, dtype=float)
     ds["reach_diff"] = np.asarray(reach_diff, dtype=float)
     ds["has_meta"] = np.asarray(has_meta, dtype=bool)
+    ds["has_dob"] = np.asarray(has_dob, dtype=bool)
+    ds["obs_ages"] = np.asarray(obs_ages, dtype=float)
+    for k in HINGE_KNOTS:
+        ds[hinge_col(k)] = np.asarray(hinge[k], dtype=float)
     ds["y"] = np.asarray(Y, dtype=float)
     ds["dates"] = np.asarray([d.toordinal() for d in DATES], dtype=float)
     ds["years"] = np.asarray([d.year for d in DATES], dtype=int)
@@ -810,6 +849,144 @@ def run_experiment(ds, meta_available):
         print("      Elo+blend baseline on this data.")
     print("=" * 72)
 
+    _age_wide(ds, train, hold, n)
+
+
+def _age_wide(ds, train, hold, n):
+    """Re-read AGE ALONE on every bout where both DOBs are known.
+
+    Why this exists. The verdict above is scored on has_meta = DOB AND REACH
+    for both corners. That was right when age and reach were one experiment.
+    Reach is now dead four ways (batch 4), and the DOB backfill took DOB
+    coverage to 97% while reach stayed near 46% — so the joint mask is
+    throwing away half the panel in order to control for nothing. AGE is the
+    biggest validated UFC finding and it is shipped in production model A, so
+    it should be re-read at the coverage the data actually has.
+
+    Two things are checked here that the joint verdict does not check:
+      1. whether the quadratic term still earns its place, against an
+         age-LINEAR-only ablation; and
+      2. whether the fitted curve's peak is INSIDE the observed age range. A
+         quadratic that peaks at 19 on a panel of 21-45 year olds is not an
+         inverted-U in any sense a reader would understand — it is a straight
+         decline wearing a curve's label, and the joint run printed exactly
+         that ('peak age ~= 19.0 [inverted-U]').
+    """
+    hd = ds["has_dob"]
+    hm = ds["has_meta"]
+    tr_w, ho_w = train & hd, hold & hd
+    print("")
+    print("=" * 72)
+    print("WIDE PANEL RE-READ: AGE ALONE, every bout with both DOBs")
+    print("-" * 72)
+    print("  DOB coverage : %d/%d (%.1f%%)   vs joint DOB+reach %d (%.1f%%)"
+          % (int(hd.sum()), n, 100.0 * hd.sum() / max(n, 1),
+             int(hm.sum()), 100.0 * hm.sum() / max(n, 1)))
+    print("  wide train %d  wide holdout %d   (joint holdout was %d)"
+          % (int(tr_w.sum()), int(ho_w.sum()), int((hold & hm).sum())))
+    if ho_w.sum() < 200 or tr_w.sum() < 500:
+        print("  (wide panel too small to re-read)")
+        return
+
+    def _fit(cols):
+        xt, yt, _ = _design(ds, cols, tr_w)
+        xh, yh, _ = _design(ds, cols, ho_w)
+        p, cf = fit_logistic(xt, yt)
+        return brier(p(xh), yh), p(xh), yh, cf
+
+    br_b, pb_w, y_w, _ = _fit(BASE_BLEND)
+    br_lin, _, _, cf_lin = _fit(BASE_BLEND + ["age_diff"])
+    br_q, pq_w, _, cf_q = _fit(BASE_BLEND + ["age_diff", "age2_diff"])
+    print("  baseline (Elo+blend)   : %.4f" % br_b)
+    print("  + age LINEAR only      : %.4f  (%+.4f)" % (br_lin, br_lin - br_b))
+    print("  + age linear+quadratic : %.4f  (%+.4f)" % (br_q, br_q - br_b))
+    print("  quadratic term buys    : %+.4f  (negative = the curve earns it)"
+          % (br_q - br_lin))
+
+    yrs = ds["years"][ho_w]
+    uy = np.unique(yrs)
+    buckets = ([(int(e[0]), int(e[-1])) for e in np.array_split(uy, 3)]
+               if len(uy) >= 3 else [(int(uy.min()), int(uy.max()))])
+    imp = per = 0
+    print("  per-period (baseline -> +age quadratic):")
+    for lo, hi in buckets:
+        m = (yrs >= lo) & (yrs <= hi)
+        if m.sum() < 30:
+            continue
+        bb, bt = brier(pb_w[m], y_w[m]), brier(pq_w[m], y_w[m])
+        print("    %d-%d  n=%-5d  %.4f -> %.4f  (%+.4f)  %s"
+              % (lo, hi, int(m.sum()), bb, bt, bt - bb,
+                 "improved" if bt < bb else "worse"))
+        per += 1
+        imp += int(bt < bb)
+
+    rng = np.random.default_rng(0)
+    be = (pb_w - y_w) ** 2
+    te = (pq_w - y_w) ** 2
+    m = len(y_w)
+    d = np.array([np.mean(te[i] - be[i])
+                  for i in (rng.integers(0, m, m) for _ in range(2000))])
+    lo_ci, hi_ci = np.percentile(d, [2.5, 97.5])
+    print("  bootstrap 95%% CI on delta : [%+.4f, %+.4f]   P(helps) %.2f"
+          % (lo_ci, hi_ci, float(np.mean(d < 0))))
+
+    names = BASE_BLEND + ["age_diff", "age2_diff"]
+    ia, ib = names.index("age_diff"), names.index("age2_diff")
+    c1 = cf_q["w"][ia] / cf_q["sd"][ia]
+    c2 = cf_q["w"][ib] / cf_q["sd"][ib]
+    ages = ds["obs_ages"]
+    a_lo, a_hi = np.percentile(ages, [1, 99])
+
+    # ---- DOES AGING ACCELERATE? The quadratic could not answer this: it fits
+    # ---- one global curvature and put its apex 37 years below the youngest
+    # ---- man in the panel. A hinge asks the same question in a shape the data
+    # ---- can actually express — one slope up to a knot, a different slope
+    # ---- after it. Reported against the LINEAR model, not the baseline,
+    # ---- because linear is what a hinge has to beat to be worth a parameter.
+    print("  aging-accelerates test — linear + hinge at knot K, vs linear "
+          "alone (%.4f):" % br_lin)
+    best_k, best_b = None, br_lin
+    for k in HINGE_KNOTS:
+        bk, _, _, cfk = _fit(BASE_BLEND + ["age_diff", hinge_col(k)])
+        nm = BASE_BLEND + ["age_diff", hinge_col(k)]
+        ih = nm.index(hinge_col(k))
+        slope_after = cfk["w"][ih] / cfk["sd"][ih]
+        print("    knot %.0f : %.4f  (%+.4f vs linear)   extra slope past the "
+              "knot %+.4f" % (k, bk, bk - br_lin, slope_after))
+        if bk < best_b:
+            best_k, best_b = k, bk
+    if best_k is None:
+        print("    -> NO KNOT BEATS A STRAIGHT LINE. Aging in the UFC does not"
+              " accelerate anywhere in 22-41; it is linear, and the shipped"
+              " age2_diff term is inert.")
+    elif best_k in (HINGE_KNOTS[0], HINGE_KNOTS[-1]):
+        print("    -> best knot %.0f is at the EDGE of the sweep (%+.4f), which"
+              " is a censored fit, not an estimate — widen the knots before"
+              " reading anything off it." % (best_k, best_b - br_lin))
+    else:
+        print("    -> knot %.0f wins by %+.4f. INTERIOR optimum, so this is a"
+              " real change of slope and not a boundary artefact. Next step is"
+              " the four gates, not the model." % (best_k, best_b - br_lin))
+    if abs(c2) > 1e-9:
+        peak = 28.0 + (-c1 / (2.0 * c2))
+        inside = a_lo <= peak <= a_hi
+        print("  fitted peak age %.1f, observed 1st-99th pct %.1f-%.1f -> %s"
+              % (peak, a_lo, a_hi,
+                 "peak is INSIDE the data: a real inverted-U" if inside else
+                 "peak is OUTSIDE the data: over the ages actually fought "
+                 "this is a MONOTONE %s, not a hump"
+                 % ("decline" if (c1 + 2 * c2 * (a_lo - 28.0)) < 0
+                    else "rise")))
+    print("-" * 72)
+    if br_q < br_b and per > 0 and imp >= max(1, per - 1):
+        print("  ==> AGE HOLDS at %.0f%% coverage: %+.4f Brier, %d/%d periods."
+              % (100.0 * hd.sum() / max(n, 1), br_q - br_b, imp, per))
+    else:
+        print("  ==> AGE DOES NOT REPLICATE on the wide panel (%+.4f, %d/%d)."
+              " The shipped model A tail needs a re-fit before the next card."
+              % (br_q - br_b, imp, per))
+    print("=" * 72)
+
 
 # ---------------------------------------------------------------------------
 # 4. OFFLINE SELFTEST  (NO network)
@@ -995,6 +1172,29 @@ def _selftest():
     peak = 28.0 + (-c1 / (2 * c2)) if abs(c2) > 1e-9 else float("nan")
     check("recovered age-curve peaks near 29 (got %.1f)" % peak,
           c2 < 0 and 26.0 <= peak <= 32.0, "peak=%.2f c2=%.4f" % (peak, c2))
+
+    # ---- the wide panel must CONTAIN the joint one, or the re-read is not a
+    # ---- re-read of the same thing. If has_meta ever had a row has_dob did
+    # ---- not, the joint verdict would be scoring bouts the wide verdict
+    # ---- never sees, and the two numbers would not be comparable at all.
+    hd = ds["has_dob"]
+    check("has_meta is a subset of has_dob",
+          bool(np.all(hd[hm])), "%d joint rows missing from wide"
+          % int((hm & ~hd).sum()))
+    # And the age columns must be LIVE on wide-only rows. If they were still
+    # gated on reach, has_dob would widen the mask while every extra row
+    # carried age_diff = 0 — the re-read would then dilute the very effect it
+    # is meant to measure and would silently read weaker, not stronger.
+    wide_only = hd & ~hm
+    if wide_only.sum() > 0:
+        check("age columns are live on DOB-only rows",
+              bool(np.any(ds["age_diff"][wide_only] != 0.0)),
+              "all %d wide-only rows have age_diff == 0"
+              % int(wide_only.sum()))
+    # Reach must stay zero where reach is unknown, or the wide panel would be
+    # feeding the joint fit made-up reach values.
+    check("reach stays zero where reach is unknown",
+          bool(np.all(ds["reach_diff"][~hm] == 0.0)))
 
     print("-" * 72)
     if fails:
