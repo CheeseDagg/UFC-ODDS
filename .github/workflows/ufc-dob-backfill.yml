@@ -147,6 +147,21 @@ jobs:
           python ufc_angles4_experiment.py --selftest 2>&1 | tee ../logs/angles4.txt
           python ufc_angles4_experiment.py 2>&1 | tail -c 40000 | tee -a ../logs/angles4.txt
 
+      - name: Stance angles (batch 5)
+        id: angles5
+        continue-on-error: true
+        timeout-minutes: 16
+        working-directory: Github
+        # Runs LAST because it is the only batch that could not run at all
+        # before this workflow existed: holdout stance coverage was 1.0% (18
+        # bouts) until the round-8 sweep took it to 91.8%.
+        env:
+          VERDICT_OUT: ../experiments/UFC-ANGLES5-VERDICT.md
+        run: |
+          mkdir -p ../logs
+          python ufc_angles5_experiment.py --selftest 2>&1 | tee ../logs/angles5.txt
+          python ufc_angles5_experiment.py 2>&1 | tail -c 40000 | tee -a ../logs/angles5.txt
+
       - name: Write run status
         if: always()
         run: |
@@ -166,6 +181,7 @@ jobs:
             echo "  angles    ${{ steps.angles.outcome }}"
             echo "  stance    ${{ steps.stance.outcome }}"
             echo "  angles4   ${{ steps.angles4.outcome }}"
+            echo "  angles5   ${{ steps.angles5.outcome }}"
             echo ""
             echo "coverage BEFORE:"; sed 's/^/  /' logs/before.txt 2>/dev/null || echo "  (step did not run)"
             echo "coverage AFTER:";  sed 's/^/  /' logs/after.txt  2>/dev/null || echo "  (step did not run)"
@@ -188,6 +204,12 @@ jobs:
             # tail would cut off exactly the half that matters.
             echo "--- reach angles (batch 4) tail (last 120 lines) ---"
             tail -n 120 logs/angles4.txt 2>/dev/null || echo "(no angles4 log)"
+            echo ""
+            # Same reasoning as batch 4: six angles x two passes, and the
+            # ceiling lines are the half that decides. 140 lines because batch
+            # 5 also prints a walk-down line per absorbed plant strength.
+            echo "--- stance angles (batch 5) tail (last 140 lines) ---"
+            tail -n 140 logs/angles5.txt 2>/dev/null || echo "(no angles5 log)"
           } > experiments/DOB-RUN-STATUS.md
           cat experiments/DOB-RUN-STATUS.md
 
@@ -203,6 +225,7 @@ jobs:
           for f in Github/fighter_meta_cache.json \
                    experiments/UFC-ANGLES2-VERDICT-WIDENED.md \
                    experiments/UFC-ANGLES4-VERDICT.md \
+                   experiments/UFC-ANGLES5-VERDICT.md \
                    experiments/DOB-RUN-STATUS.md; do
             git add "$f" 2>/dev/null || true
           done

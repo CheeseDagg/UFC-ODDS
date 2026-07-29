@@ -154,8 +154,16 @@ class Panel:
         self.M = mod
         self.feats = feats
         self.with_reach = with_reach
-        self._wants_reach = "with_reach" in inspect.signature(
-            mod.fit_baseline).parameters
+        # THE SECOND-PASS FLAG IS FOUND BY SHAPE, NOT BY NAME. angles4 calls it
+        # with_reach because its absorbable control is raw reach; angles5 calls
+        # it with_stance because its absorbable controls are the two rank-1
+        # stance directions. Hard-coding "with_reach" here would have made the
+        # gates silently run angles5's SECOND pass as a FIRST pass — the
+        # baseline would omit the very main effects the interactions are built
+        # on, every gate would then be scoring "the main effect in a wig", and
+        # nothing about the output would look wrong.
+        self._flag = next((p for p in inspect.signature(
+            mod.fit_baseline).parameters if p.startswith("with_")), None)
         self._wants_base_extra = "base_extra" in inspect.signature(
             mod.ll).parameters
         self.refit()
@@ -169,9 +177,9 @@ class Panel:
         baseline coefficients is not a replication, it is a transplant.
         """
         M = self.M
-        if self._wants_reach:
+        if self._flag:
             co, tr, be = M.fit_baseline(self.feats, out=lambda s: None,
-                                        with_reach=self.with_reach)
+                                        **{self._flag: self.with_reach})
             self.base_extra = be
         else:
             co, tr = M.fit_baseline(self.feats, out=lambda s: None)
