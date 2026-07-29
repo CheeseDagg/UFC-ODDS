@@ -309,8 +309,14 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
                 # guessing at it one 200-char window at a time is the expensive
                 # way to find out.
                 dumped = True
-                log("    ---- full challenge body ----")
-                log(html[:6000])
+                # Round 5 identified it: a SHA-256 proof-of-work interstitial.
+                # The first 60 lines are just a hand-rolled sha256 in JS and we
+                # have hashlib, so they are noise. Everything that MATTERS —
+                # the challenge seed, the difficulty, the cookie name, the
+                # reload — is in the tail, and the tail is what round 5's
+                # 120-line log window clipped off.
+                log("    ---- challenge TAIL (params, cookie, reload) ----")
+                log(html[-2200:])
                 log("    ---- end body ----")
         index.update(found)
         time.sleep(0.2)

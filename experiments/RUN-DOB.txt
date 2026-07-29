@@ -1,20 +1,20 @@
-round 5 — 2026-07-29
+round 6 — 2026-07-29
 
-Round 4's diagnostic did its job and cleared the scraper of the charge. All 26
-index letters came back as the SAME 2,994-byte page: `<title>Loading…</title>`,
-`robots: noindex`, zero 'fighter-details' anchors. That is a JS interstitial,
-not a parse failure and not an outage — ufcstats does not serve the fighter
-index to this client at all. The scheme-agnostic regex from round 4 was still
-worth having, but it was not the problem.
+Round 5 named the thing. ufcstats is behind a SHA-256 PROOF-OF-WORK
+interstitial: "Checking your browser…", a hand-rolled sha256 in JavaScript,
+and a client that has to grind a nonce before it is let through. The cookie
+jar came back holding zero cookies, so the cookie is issued only AFTER the
+work is done — the browser UA and the jar were necessary but nowhere near
+sufficient.
 
-Two things about the old client made a challenge unpassable by construction:
-it announced itself as "CheeseDagg-ufc-odds/1.0", and it discarded cookies
-between requests, so a challenge that works by setting one could never have
-succeeded. Round 5 sends a browser-shaped header set, keeps ONE cookie jar for
-the whole process, and warms it on the events page before touching the index.
-Wikidata keeps the honest descriptive UA — WDQS asks for one and throttles
-generic browser strings.
+The good news is that this is the most tractable kind of block. It is not a
+CAPTCHA and it is not IP reputation; it is arithmetic, and Python has hashlib.
+What round 6 needs is the parameter block: the challenge seed, the difficulty,
+the cookie name and how the page reloads itself. All of that sits at the END
+of the script, and round 5's 120-line log window clipped exactly that off
+after spending its budget printing sixty lines of a sha256 implementation we
+already have in the standard library.
 
-And if it is still blocked, round 5 prints the entire ~3 KB body once instead
-of the first 200 characters. Whatever the interstitial wants is written in
-there. Round 4 spent a whole round trip to read two hundred characters of it.
+Round 6 prints the last 2,200 characters instead of the first 6,000, and the
+status file keeps 200 lines instead of 120. One more round trip to read the
+parameters, then the solver is a dozen lines.
