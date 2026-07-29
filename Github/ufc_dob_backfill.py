@@ -140,9 +140,16 @@ def plausible(dob, first_bout):
 
 # ------------------------------------------------------------------ sources
 # --- 1. ufcstats.com (same database the bout file came from) ---------------
+# Capture the fighter ID, not the whole href, and let the scheme be https,
+# http, protocol-relative or absent. The previous version hard-coded `http://`
+# and that is the single best explanation for round 3: 26 index pages fetched
+# without a single exception and ZERO fighters enumerated. A site quietly
+# moving to https breaks a scheme-pinned scraper with no error to show for it.
+# Anything scheme-shaped is accepted here and the URL is rebuilt canonically.
 LINK_RE = re.compile(
-    r'href="(http://(?:www\.)?ufcstats\.com/fighter-details/[0-9a-f]+)"[^>]*>'
-    r'\s*([^<]*?)\s*</a>', re.I)
+    r'href="(?:https?:)?//(?:www\.)?ufcstats\.com/fighter-details/([0-9a-f]+)"'
+    r'[^>]*>\s*([^<]*?)\s*</a>', re.I)
+DETAIL_URL = "http://ufcstats.com/fighter-details/{fid}"
 MONTHS = {m: i + 1 for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
@@ -157,8 +164,8 @@ def parse_index(html):
     layout, which is the part of a scrape most likely to be re-skinned.
     """
     order, parts = [], {}
-    for url, txt in LINK_RE.findall(html):
-        url = url.replace("www.", "")
+    for fid, txt in LINK_RE.findall(html):
+        url = DETAIL_URL.format(fid=fid.lower())
         if url not in parts:
             parts[url] = []
             order.append(url)
@@ -233,6 +240,17 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
             log(f"  index '{c}' failed ({type(e).__name__})")
             continue
         found = parse_index(html)
+        if not found and not index:
+            # A page that fetched fine and parsed to nothing is the failure mode
+            # that cost round 3 an entire hour with no signal. Say WHY, once:
+            # a short body is a block or a challenge page, a long body with
+            # fighter-details anchors present is the regex drifting again, and a
+            # long body with none of them means the page moved.
+            anchors = html.lower().count("fighter-details")
+            head = re.sub(r"\s+", " ", html[:200])
+            log(f"  index '{c}' parsed 0 rows from {len(html)} chars, "
+                f"{anchors} 'fighter-details' mentions")
+            log(f"    head: {head}")
         index.update(found)
         time.sleep(0.2)
     log(f"  ufcstats index: {len(index)} fighters enumerated")
@@ -491,6 +509,18 @@ def selftest():
     assert got["http://ufcstats.com/fighter-details/abc123"].startswith(
         "Chuck Liddell"), got
     assert got["http://ufcstats.com/fighter-details/def456"] == "Tito Ortiz"
+    # SCHEME-AGNOSTIC. Round 3 enumerated 0 fighters with no exception raised,
+    # and a scraper pinned to `http://` against a site that moved to `https://`
+    # is exactly that symptom. Every scheme spelling must fold to the same row.
+    for href in ('https://ufcstats.com/fighter-details/abc123',
+                 '//ufcstats.com/fighter-details/abc123',
+                 'http://www.ufcstats.com/fighter-details/ABC123',
+                 'HTTPS://UFCStats.com/fighter-details/abc123'):
+        one = parse_index(f'<a href="{href}">Chuck</a>'
+                          f'<a href="{href}">Liddell</a>')
+        assert one == {"http://ufcstats.com/fighter-details/abc123":
+                       "Chuck Liddell"}, (href, one)
+
     want = {"chuck liddell", "tito ortiz"}
     assert match_key("Chuck Liddell The Iceman", want) == "chuck liddell"
     assert match_key("Tito Ortiz", want) == "tito ortiz"
