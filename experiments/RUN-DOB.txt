@@ -1,20 +1,38 @@
-round 6 — 2026-07-29
+round 7 — 2026-07-29  (the one that should actually pull)
 
-Round 5 named the thing. ufcstats is behind a SHA-256 PROOF-OF-WORK
-interstitial: "Checking your browser…", a hand-rolled sha256 in JavaScript,
-and a client that has to grind a nonce before it is let through. The cookie
-jar came back holding zero cookies, so the cookie is issued only AFTER the
-work is done — the browser UA and the jar were necessary but nowhere near
-sufficient.
+Rounds 3 through 6 walked this down one observation at a time, and each round
+bought exactly one fact because a commit on main is the only channel back:
 
-The good news is that this is the most tractable kind of block. It is not a
-CAPTCHA and it is not IP reputation; it is arithmetic, and Python has hashlib.
-What round 6 needs is the parameter block: the challenge seed, the difficulty,
-the cookie name and how the page reloads itself. All of that sits at the END
-of the script, and round 5's 120-line log window clipped exactly that off
-after spending its budget printing sixty lines of a sha256 implementation we
-already have in the standard library.
+  round 3  the scrape produced nothing, and for the first time said so
+  round 4  the 26 index pages fetch cleanly and parse to ZERO — not a network
+           problem, and the http:// -pinned regex was not it either
+  round 5  it is a JS interstitial: 2,994 bytes, "Checking your browser…",
+           and the cookie jar came back holding nothing
+  round 6  read the parameters off the page
 
-Round 6 prints the last 2,200 characters instead of the first 6,000, and the
-status file keeps 200 lines instead of 120. One more round trip to read the
-parameters, then the solver is a dozen lines.
+The block is a SHA-256 proof of work:
+
+    nonce  = a fresh 16-hex string, per response
+    target = "0" * 2, the difficulty, stated in the page
+    find the smallest n where sha256(f"{nonce}:{n}") starts with target
+    POST nonce=<nonce>&n=<n>, form-encoded, to /__c  -> sets the cookie
+    re-request the original URL
+
+At difficulty 2 that is about 256 hashes. Microseconds in hashlib. The block
+was never about compute — it was about being a browser, and the old client
+failed it three ways at once: it announced itself as a bot, it threw away the
+cookie the toll buys, and it had no way to run the arithmetic.
+
+Round 7 pays the toll once on the events page and rides the cookie through the
+26 index pages and ~1,270 detail pages. Nothing is hard-coded: the nonce, the
+difficulty and the POST path are all parsed out of the page, because the nonce
+is per-response and the difficulty is the site's to raise. If the shape ever
+changes, the solver returns None and the run reports "challenge I could not
+solve" — a legible failure instead of another silent zero.
+
+The selftest runs the fake site BEHIND the challenge, so it exercises the
+grind, the POST and the retry, and asserts the toll is paid exactly once
+across 1,300 requests rather than once per request.
+
+If coverage moves off 4223/8686, the angles-2 re-run in this same job finally
+gets a decisive test instead of a 47%-complete age control.

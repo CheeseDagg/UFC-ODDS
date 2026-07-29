@@ -53,7 +53,7 @@ RULES.
 Offline (sandbox): both hosts are blocked, so this prints UNREACHABLE and exits
 0. Fire it on Actions by touching experiments/RUN-DOB.txt.
 """
-import csv, http.cookiejar, json, os, re, sys, time, datetime as dt
+import csv, hashlib, http.cookiejar, json, os, re, sys, time, datetime as dt
 import urllib.parse, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -117,6 +117,79 @@ def looks_like_challenge(html):
     cost round 3 an entire silent hour.
     """
     return len(html) < 8000 and "fighter-details" not in html.lower()
+
+
+def solve_challenge(html):
+    """Solve the SHA-256 proof-of-work interstitial. -> (nonce, n, path)|None.
+
+    Rounds 3-6 walked this down one observation at a time: round 3 said the
+    scrape produced nothing, round 4 said the pages fetched fine and parsed to
+    zero, round 5 named it a JS challenge, round 6 read the parameters. The
+    protocol is:
+
+        nonce = "23f5bcca80f4a0a3"          (fresh per response)
+        target = "0" * 2                    (difficulty, from the page)
+        find the smallest n with sha256(f"{nonce}:{n}") starting with target
+        POST nonce=<nonce>&n=<n> to /__c    (form-encoded), which sets a cookie
+        re-request the original URL
+
+    Difficulty 2 is ~256 hashes — microseconds in hashlib. The block was never
+    about compute, it was about being a browser. Everything here is parsed OUT
+    of the page rather than hard-coded, because a nonce is per-response and a
+    difficulty the site can raise whenever it likes; the only constant is the
+    shape. If the shape changes this returns None and the caller reports a
+    challenge it could not solve, which is a legible failure rather than
+    another silent zero.
+    """
+    m = re.search(r'var\s+nonce\s*=\s*"([0-9a-fA-F]+)"', html)
+    d = re.search(r"new\s+Array\(\s*(\d+)\s*\+\s*1\s*\)\s*\.join\(\s*'0'\s*\)",
+                  html)
+    p = re.search(r"""\.open\(\s*['"]POST['"]\s*,\s*["']([^"']+)["']""", html)
+    if not m or not d:
+        return None
+    nonce, target = m.group(1), "0" * int(d.group(1))
+    # Bounded. At difficulty 2 the expected n is 256 and 16**6 is 16 million,
+    # so this only trips if the site raised the difficulty into a range where
+    # grinding it would be both slow and rude — in which case we want to hear
+    # about it, not spin the runner for an hour.
+    for n in range(16 ** 6):
+        if hashlib.sha256(f"{nonce}:{n}".encode()).hexdigest().startswith(
+                target):
+            return nonce, n, (p.group(1) if p else "/__c")
+    return None
+
+
+def get_solved(url, timeout=30, headers=None, log=print, tries=2):
+    """_get, but transparently pays the proof-of-work toll if asked to.
+
+    Returns decoded text. The cookie the POST earns lands in the shared jar,
+    so the toll is paid once and the following ~1,300 requests ride on it.
+    """
+    html = _get(url, timeout, headers).decode("utf-8", "replace")
+    for _ in range(tries):
+        if not looks_like_challenge(html):
+            return html
+        sol = solve_challenge(html)
+        if not sol:
+            return html
+        nonce, n, path = sol
+        base = urllib.parse.urlsplit(url)
+        body = urllib.parse.urlencode({"nonce": nonce, "n": n}).encode()
+        req = urllib.request.Request(
+            urllib.parse.urlunsplit((base.scheme, base.netloc, path, "", "")),
+            data=body,
+            headers=dict(headers or UA,
+                         **{"Content-Type":
+                            "application/x-www-form-urlencoded"}))
+        try:
+            _OPENER.open(req, timeout=timeout).read()
+        except Exception as e:
+            log(f"  challenge POST failed ({type(e).__name__})")
+            return html
+        log(f"  challenge solved: nonce={nonce} n={n} -> {path}, "
+            f"{len(_JAR)} cookie(s) held")
+        html = _get(url, timeout, headers).decode("utf-8", "replace")
+    return html
 
 
 # ------------------------------------------------------------------ inputs
@@ -275,18 +348,20 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
     # setting challenge, the cookie is what the index pages need, and the old
     # client discarded it. Cheap enough to be worth doing unconditionally.
     try:
-        root = _get("http://ufcstats.com/statistics/events/completed",
-                    timeout=45).decode("utf-8", "replace")
+        # Pay the proof-of-work toll ONCE here. The cookie it earns is what the
+        # 26 index pages and ~1,300 detail pages then ride on.
+        root = get_solved("http://ufcstats.com/statistics/events/completed",
+                          timeout=45, log=log)
         log(f"  warmed cookie jar: {len(root)} chars, "
-            f"{len(_JAR)} cookie(s) held")
+            f"{len(_JAR)} cookie(s) held, "
+            f"still challenged={looks_like_challenge(root)}")
     except Exception as e:
         log(f"  cookie warm failed ({type(e).__name__})")
 
     dumped = False
     for c in "abcdefghijklmnopqrstuvwxyz":
         try:
-            html = _get(UFCSTATS_INDEX.format(c=c), timeout=60).decode(
-                "utf-8", "replace")
+            html = get_solved(UFCSTATS_INDEX.format(c=c), timeout=60, log=log)
         except Exception as e:
             log(f"  index '{c}' failed ({type(e).__name__})")
             continue
@@ -332,7 +407,8 @@ def pull_ufcstats(wanted, log=print, max_fetch=None, on_partial=None):
     out = {}
     for i, (url, nm, key) in enumerate(todo):
         try:
-            rec = parse_detail(_get(url, timeout=45).decode("utf-8", "replace"))
+            rec = parse_detail(get_solved(url, timeout=45,
+                                          log=lambda _s: None))
         except Exception:
             continue
         time.sleep(0.12)
@@ -590,6 +666,32 @@ def selftest():
         assert one == {"http://ufcstats.com/fighter-details/abc123":
                        "Chuck Liddell"}, (href, one)
 
+    # --- the proof-of-work solver, against the real page's shape -----------
+    chal = ('<!doctype html><html><head><title>Loading…</title></head>'
+            '<body><p>Checking your browser…</p><script>'
+            'var nonce="23f5bcca80f4a0a3",\n'
+            "    target=new Array(3+1).join('0');\n"
+            'var n=0;\n'
+            "while(sha256(nonce+':'+n).slice(0,target.length)!==target){n++;}\n"
+            'var xhr=new XMLHttpRequest();\n'
+            'xhr.open(\'POST\',"/__c",true);\n'
+            '</script></body></html>')
+    assert looks_like_challenge(chal), "the challenge shape is not recognised"
+    got = solve_challenge(chal)
+    assert got is not None, "solver failed to parse the real page shape"
+    nonce, n, path = got
+    assert nonce == "23f5bcca80f4a0a3" and path == "/__c", got
+    # DIFFICULTY IS READ FROM THE PAGE, not assumed. The live page says 2; this
+    # fixture says 3 on purpose, so a solver that hard-codes 2 fails here.
+    assert hashlib.sha256(f"{nonce}:{n}".encode()).hexdigest().startswith(
+        "000"), f"n={n} does not actually satisfy the difficulty"
+    assert all(not hashlib.sha256(f"{nonce}:{i}".encode()).hexdigest()
+               .startswith("000") for i in range(n)), "not the SMALLEST n"
+    # a page that is not a challenge must not be mistaken for one
+    assert solve_challenge("<html>no challenge here</html>") is None
+    assert not looks_like_challenge(
+        '<a href="http://ufcstats.com/fighter-details/abc">x</a>')
+
     want = {"chuck liddell", "tito ortiz"}
     assert match_key("Chuck Liddell The Iceman", want) == "chuck liddell"
     assert match_key("Tito Ortiz", want) == "tito ortiz"
@@ -618,8 +720,8 @@ def selftest():
     # step timeout is that a wall-clock kill loses everything the pass had
     # already fetched. That protection is worthless if on_partial never fires,
     # so drive pull_ufcstats against a fake network and count the callbacks.
-    global _get
-    _real_get = _get
+    global _get, _OPENER
+    _real_get, _real_opener = _get, _OPENER
     names = [f"Fighter{i:04d} Test" for i in range(450)]
     fake_index = "".join(
         f'<tr><td><a href="http://ufcstats.com/fighter-details/{i:06x}">'
@@ -630,18 +732,45 @@ def selftest():
     detail = ('<li><i class="b-list__box-item-title">DOB:</i> Jan 02, 1990</li>'
               '<li><i class="b-list__box-item-title">STANCE:</i> Southpaw</li>')
 
-    def _fake(url, timeout=30):
+    # The fake site is BEHIND THE CHALLENGE until the toll is paid, so this
+    # drives the whole protocol — grind, POST, retry — and not just the parser.
+    # Testing solve_challenge() alone would have passed against a client that
+    # never actually re-requests the page after solving.
+    state = {"paid": False, "posts": 0}
+
+    def _fake(url, timeout=30, headers=None):
+        if not state["paid"]:
+            return chal.encode()
         # one letter's index carries every fake fighter; the other 25 are empty
         if "statistics/fighters" in url:
             return (fake_index if "char=a" in url else "").encode()
         return detail.encode()
 
-    _get = _fake
+    class _FakeOpener:
+        """Stands in for the urllib opener so the POST never leaves the box."""
+
+        @staticmethod
+        def open(req, timeout=None):
+            assert req.get_method() == "POST", "the toll must be a POST"
+            assert req.full_url.endswith("/__c"), req.full_url
+            q = dict(urllib.parse.parse_qsl(req.data.decode()))
+            # the server's job: verify the work before handing out the cookie
+            h = hashlib.sha256(f"{q['nonce']}:{q['n']}".encode()).hexdigest()
+            assert h.startswith("000"), f"bad proof of work: {h[:8]}"
+            state["paid"] = True
+            state["posts"] += 1
+            return type("R", (), {"read": staticmethod(lambda: b"ok")})()
+
+    _get, _OPENER = _fake, _FakeOpener
     try:
         seen = []
         out = pull_ufcstats({norm_name(n) for n in names},
                             log=lambda s: None,
                             on_partial=lambda o: seen.append(len(o)))
+        assert state["paid"], "the challenge was never solved"
+        assert state["posts"] == 1, (
+            f"the toll was paid {state['posts']} times — the cookie jar is not "
+            "being reused, which would mean ~1,300 extra POSTs on a real run")
         assert len(out) == 450, f"fake pull lost rows: {len(out)}"
         assert seen == [200, 400], f"on_partial did not fire every 200: {seen}"
         # and it must hand over a GROWING view of the same dict, not a copy of
@@ -652,7 +781,7 @@ def selftest():
         assert len(pull_ufcstats({norm_name(n) for n in names},
                                  log=lambda s: None, max_fetch=10)) == 10
     finally:
-        _get = _real_get
+        _get, _OPENER = _real_get, _real_opener
 
     print("DOB BACKFILL SELFTEST PASS — normalizer mirrors production, "
           "plausibility gate rejects namesakes, existing DOBs untouched, "
