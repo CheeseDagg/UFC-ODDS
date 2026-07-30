@@ -154,3 +154,28 @@ TWO METHOD CHANGES CAME OUT OF THIS ROUND AND BOTH ARE LOAD-BEARING.
    free to impersonate experience — and it would have shipped CAGE. The
    experiment now shouts when a control pins at zero, because a control that
    fits to zero controls nothing and nothing about the output looks wrong.
+
+--------------------------------------------------------------------------------
+RETROACTIVE: ACTIV DOES NOT SHIP EITHER
+--------------------------------------------------------------------------------
+The ladder fix above was applied to round 3's only outstanding candidate. ACTIV
+fits at b=+0.10; the old ladder planted at the grid wall, b=+0.30, three times
+the effect the data claims. Re-read at its own fitted magnitude, 12 seeds,
+age-complete subset n=8439:
+
+  plant b=+0.30  oracle +0.00476 [-0.00137..+0.01150]  fitted +0.00501  6/12
+                 -> "won but sits inside the oracle's own seed spread:
+                     UNPROVEN, needs a placebo"          (the old reading)
+  plant b=+0.10  oracle +0.00014 [-0.00160..+0.00203]  fitted +0.00029  1/12
+                 -> "measured >= ORACLE: noise by construction"
+
+A true +0.10 activity effect is recovered once in twelve tries and buys a model
+that KNOWS it +0.00014. ACTIV measured +0.00063 — four times what full knowledge
+of the effect is worth. Same signature as MILEAGE, and the same verdict.
+
+That leaves LAYAGE as the only surviving UFC angle in six rounds, and LAYAGE is
+unaffected by the fix: it fits at -0.08, which is already the smallest magnitude
+on its own grid, so the old ladder had stepped all the way down to the fitted
+value before it stopped. Its ceiling was and remains PROBE UNINFORMATIVE — the
+baseline absorbs the plant at every rung — and its case rests on the 300-shuffle
+placebo (p=0.0033) and the three-era replication, not on a ceiling.
