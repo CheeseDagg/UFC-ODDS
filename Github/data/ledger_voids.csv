@@ -1,0 +1,3 @@
+voided_on,ledger,event,date,f1,f2,p1,reason
+2026-07-31,ufc_predictions_blend.csv,UFC Fight Night: Medic vs. Rodriguez,2026-08-01,Oban Elliott,Charles Oliveira,0.2749,odds feed display name 'Charles Oliveira' contradicted its own slug michael-oliveira-50272; prediction was built from Charles Oliveira's record (Elo 1985) for a bout he is not in
+2026-07-31,ufc_predictions.csv,UFC Fight Night: Medic vs. Rodriguez,2026-08-01,Oban Elliott,Charles Oliveira,0.2689,odds feed display name 'Charles Oliveira' contradicted its own slug michael-oliveira-50272; prediction was built from Charles Oliveira's record (Elo 1985) for a bout he is not in

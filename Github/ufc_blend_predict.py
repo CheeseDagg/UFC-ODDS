@@ -51,6 +51,8 @@ to data/ufc_predictions.csv or data/ufc_graded.csv (the production files).
 import os
 import re
 import sys
+import difflib
+import unicodedata
 import csv
 import json
 import math
@@ -172,7 +174,21 @@ def _pre_feats(st, fight_date):
 
 
 def _update_state(st, row, fight_date):
+    """Advance state by one fight.
+
+    A row carrying stats_known=0 is a RESULT-ONLY row bridged in from
+    data/results_delta.csv (see ufc_delta_bouts.py): the outcome, the KO-loss
+    flag, the fight count and the layoff clock are all recoverable from a
+    result line, but the per-fight box score is not. For those rows the four
+    form EMAs are LEFT ALONE rather than fed a zero — a zero would enter the
+    EMA as a genuine observation meaning "fought and did nothing", which is a
+    strong false claim, whereas skipping leaves the last real value in place,
+    which is merely out of date. The 'won' EMA is still updated because the
+    result itself is known."""
+    stats_known = str(row.get("stats_known", "1")).strip() not in ("0", "0.0")
     vals = _fight_vals(row)
+    if not stats_known:
+        vals = {"won": _f(row, "won")}
     for k, v in vals.items():
         st.ema[k] = v if st.ema[k] is None else (EMA_ALPHA * v +
                                                  (1.0 - EMA_ALPHA) * st.ema[k])
@@ -257,11 +273,31 @@ def _age_block(st1, st2, dob1, dob2, fight_date):
     return ages + [lay]
 
 
-def build_state_and_data(bouts_csv, dobs):
+def build_state_and_data(bouts_csv, dobs, delta_csv=None):
     """One chronological pass: emit leak-free training rows, update state.
-    Returns (state, XA, yA, XB, yB) — A rows only where both corners have DOB."""
+    Returns (state, XA, yA, XB, yB) — A rows only where both corners have DOB.
+
+    fighter_bouts.csv is a full-stat scrape and it stops at the ratings
+    baseline; every card since then exists only as result lines in
+    data/results_delta.csv. With delta=True those results are bridged in
+    (ufc_delta_bouts.delta_rows) so Elo, fight counts, KO-loss counts and
+    especially the layoff clock are current. The bridge is chronologically
+    safe: every delta bout predates the next card, and dedupe_fights sorts by
+    date, so the pass still scores each fight from PRE-update state."""
     with open(bouts_csv, newline="") as f:
         rows = list(csv.DictReader(f))
+    try:
+        import ufc_delta_bouts
+        drows, rep = ufc_delta_bouts.delta_rows(
+            delta_csv or ufc_delta_bouts.DELTA, bouts_csv)
+        rows += drows
+        if rep["bouts"]:
+            print("[state] merged %d post-baseline bout(s) from results_delta "
+                  "(bouts.csv through %s)" % (rep["bouts"], rep["bouts_csv_through"]),
+                  file=sys.stderr)
+    except Exception as e:                            # fail soft: baseline only
+        print(f"[warn] results_delta not merged ({e}); state is baseline-only",
+              file=sys.stderr)
     fights = dedupe_fights(rows)
     state = {}
     XA, ya, XB, yb = [], [], [], []
@@ -338,6 +374,53 @@ def read_card(parsed_json, upcoming_csv):
     return event, cdate, values
 
 
+SLUG_MATCH = 0.80          # below this, display name and slug are different people
+
+
+def _slug_name(slug):
+    """'michael-oliveira-50272' -> 'michael oliveira'. The odds feed's slug is
+    keyed on the site's own fighter ID, so it is the reliable identifier; the
+    display name beside it is free text and is sometimes simply wrong."""
+    s = re.sub(r"-\d+$", "", (slug or "").strip())
+    return s.replace("-", " ").strip().lower()
+
+
+def _toks(s):
+    """Accent-folded lowercase word tokens: 'Vlasto Čepo' -> ['vlasto','cepo'],
+    so the slug's ASCII spelling compares equal to the display name's."""
+    s = unicodedata.normalize("NFKD", (s or "").strip().lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return [t for t in re.split(r"[^a-z0-9]+", s) if t]
+
+
+def _trusted_name(display, slug):
+    """Return the name to look up in state — the display name normally, the
+    slug's name when the two are different people.
+
+    THE OLIVEIRA BUG. odds/parsed_odds.json carried f2='Charles Oliveira' with
+    f2_slug='michael-oliveira-50272' for the 2026-08-01 card. The actual fight
+    is Oban Elliott vs MICHAEL Oliveira, a fighter with no history in the file.
+    Resolving the display name found CHARLES Oliveira -- a former lightweight
+    champion, Elo ~1985 -- and the model duly priced Elliott at 20%. The bout
+    is not a 20% bout; it is an unrateable one. The existing staleness guard
+    could not catch this because Charles fought five months ago.
+
+    Slug spelling drift is normal and harmless ('dennis-buzukia-29076' for
+    'Dennis Buzukja'), so this only fires on a genuine mismatch."""
+    sname = _slug_name(slug)
+    dt_, st_ = _toks(display), _toks(sname)
+    if not st_ or not dt_:
+        return display
+    # Compare GIVEN name and SURNAME separately. A whole-string ratio is no use
+    # here: 'charles oliveira' vs 'michael oliveira' scores 0.81 because the
+    # shared surname carries it, which is exactly the case that must be caught.
+    def near(a, b):
+        return difflib.SequenceMatcher(None, a, b).ratio() >= SLUG_MATCH
+    if near(dt_[0], st_[0]) and near(dt_[-1], st_[-1]):
+        return display
+    return sname                     # trust the ID-backed slug over free text
+
+
 def predict_card(state, pred_a, pred_b, dobs, values, cdate):
     """-> (bouts for log_card, per-bout detail incl. which model fired)."""
     keys = {ufc_grade.norm(name): name for name in state}
@@ -348,8 +431,8 @@ def predict_card(state, pred_a, pred_b, dobs, values, cdate):
     bouts, details = [], []
     STALE_YEARS = 6                        # a namesake guard, not a comeback penalty
     for v in values:
-        k1 = ufc_grade.resolve(v.get("f1", ""), keys)
-        k2 = ufc_grade.resolve(v.get("f2", ""), keys)
+        k1 = ufc_grade.resolve(_trusted_name(v.get("f1", ""), v.get("f1_slug")), keys)
+        k2 = ufc_grade.resolve(_trusted_name(v.get("f2", ""), v.get("f2_slug")), keys)
         # NAMESAKE GUARD (the 'Rick Davis 2006' bug): if the resolved history's last
         # fight is >6 years before this card, it is almost certainly a DIFFERENT person
         # with the same name (UFC re-signs almost nobody after 6+ years out). Treat the
@@ -427,7 +510,7 @@ def run(bouts_csv=BOUTS_CSV, meta_path=META_CACHE, parsed_json=PARSED_ODDS,
         return {"n_logged": n_new, "n_settled": n_settled, "panel": out,
                 "details": [], "state": None}
     dobs = load_meta(meta_path)
-    state, XA, ya, XB, yb = build_state_and_data(bouts_csv, dobs)
+    state, XA, ya, XB, yb = build_state_and_data(bouts_csv, dobs, delta_csv)
     if not XB:
         raise RuntimeError("no completed fights in %s" % bouts_csv)
     pred_b = fit_mirror_logistic(XB, yb)
@@ -657,8 +740,58 @@ def selftest():
     assert not os.path.exists(os.path.join(tmp, "ufc_graded.csv"))
     assert not os.path.exists(prod_stub), "prod stub must never be created"
 
-    print("UFC BLEND A/B SELFTEST PASS — state+EMA+Elo build, A/B routing, "
-          "mirror symmetry, idempotent log, settle, panel, prod untouched")
+    # (g) results_delta bridge: a result-only card must advance Elo, fight
+    # count, KO-losses and the layoff clock WITHOUT corrupting the form EMAs.
+    # This is the whole point of the bridge — before it, state froze at the
+    # last full-stat scrape while four cards' worth of results sat unused.
+    dobs = load_meta(meta_path)
+    base_st, _, _, _, _ = build_state_and_data(bouts_csv, dobs, nodelta)
+    dfile = os.path.join(tmp, "delta_state.csv")
+    with open(dfile, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["event_date", "event", "winner", "loser", "method", "round"])
+        w.writerow([(today - dt.timedelta(days=1)).isoformat(), "Delta Card",
+                    "Bravo Punch", "Alpha Kick", "KO/TKO", 1])
+    new_st, _, _, _, _ = build_state_and_data(bouts_csv, dobs, dfile)
+    a0, a1 = base_st["Alpha Kick"], new_st["Alpha Kick"]
+    b0, b1 = base_st["Bravo Punch"], new_st["Bravo Punch"]
+    assert b1.elo > b0.elo and a1.elo < a0.elo, "delta result did not move Elo"
+    assert a1.n == a0.n + 1 and b1.n == b0.n + 1, "fight count did not advance"
+    assert a1.last > a0.last, "layoff clock did not reset for the loser"
+    assert a1.ko_losses == a0.ko_losses + 1, "KO loss not charged to the loser"
+    assert b1.ko_losses == b0.ko_losses, "KO loss wrongly charged to the winner"
+    for k in ("strike", "grap", "ctrl", "sub"):
+        assert a1.ema[k] == a0.ema[k] and b1.ema[k] == b0.ema[k], \
+            "form EMA %r was written from a stats-unknown row" % k
+    assert a1.ema["won"] != a0.ema["won"], "won EMA must track a known result"
+    # and the bridge must not double-count a bout already in fighter_bouts
+    again, _, _, _, _ = build_state_and_data(bouts_csv, dobs, dfile)
+    assert again["Alpha Kick"].n == a1.n, "delta merge is not idempotent"
+
+    # (h) slug guard: an ID-backed slug beats a wrong display name, and normal
+    # spelling drift between the two must NOT trip the guard.
+    assert _trusted_name("Charles Oliveira", "michael-oliveira-50272") == \
+        "michael oliveira", "wrong display name was trusted over its own slug"
+    assert _trusted_name("Dennis Buzukja", "dennis-buzukia-29076") == \
+        "Dennis Buzukja", "harmless slug spelling drift tripped the guard"
+    assert _trusted_name("Uros Medic", None) == "Uros Medic", "no slug -> display"
+    assert _trusted_name("Vlasto \u010cepo", "vlasto-cepo-36708") == "Vlasto \u010cepo", \
+        "accent folding failed: slug guard tripped on Cepo"
+    # end to end: a bout whose display name points at a STRONG unrelated fighter
+    # must be skipped, not priced off that fighter's record
+    _st, _XA, _ya, _XB, _yb = build_state_and_data(bouts_csv, dobs, nodelta)
+    _pb = fit_mirror_logistic(_XB, _yb)
+    good = [{"f1": "Alpha Kick", "f2": "Bravo Punch", "f1_slug": "alpha-kick-1",
+             "f2_slug": "bravo-punch-2", "cons1": 0.5, "event": "Slug Card"}]
+    bad = [dict(good[0], f2_slug="zulu-nobody-999")]
+    assert len(predict_card(_st, None, _pb, dobs, good, card_date)[1]) == 1, \
+        "matching slug bout should price normally"
+    assert predict_card(_st, None, _pb, dobs, bad, card_date)[1] == [], \
+        "slug-mismatched bout was priced instead of skipped"
+
+    print("UFC BLEND A/B SELFTEST PASS — state+EMA+Elo build, results_delta "
+          "bridge, A/B routing, mirror symmetry, idempotent log, settle, "
+          "panel, prod untouched")
     return 0
 
 

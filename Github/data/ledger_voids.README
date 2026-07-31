@@ -1,0 +1,3 @@
+data/ledger_voids.csv — predictions removed BEFORE settlement because the
+bout was priced off the wrong fighter. Not removed for being wrong; removed
+for being about someone who is not in the fight.
