@@ -7,7 +7,9 @@
  "market": {
   "n": 11,
   "acc": 81.8,
+  "model_acc": 36.4,
   "disagree_n": 5,
-  "disagree_model_right": 0.0
+  "disagree_model_right": 0.0,
+  "disagree_market_right": 100.0
  }
 }

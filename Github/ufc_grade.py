@@ -217,10 +217,28 @@ def summarize(rows):
     if M:
         macc = sum(1 for pm, qm, yy in M if (qm > 0.5) == (yy == 1)) / len(M)
         dis = [(pm, qm, yy) for pm, qm, yy in M if (pm > 0.5) != (qm > 0.5)]
+        # LIKE FOR LIKE. panel["acc"] above is over every graded bout; market["acc"] can
+        # only be over the ones that carried a devigged consensus. Today those sets are
+        # the same size, so the two figures happen to be comparable -- but the moment one
+        # bout logs without a price they silently stop being, and nothing here would say
+        # so. model_acc is the model's rate on the market's own subset, always.
+        pacc = sum(1 for pm, _q, yy in M if (pm > 0.5) == (yy == 1)) / len(M)
         panel["market"] = {"n": len(M), "acc": round(100 * macc, 1),
+                           "model_acc": round(100 * pacc, 1),
                            "disagree_n": len(dis),
                            "disagree_model_right": (round(100 * sum(
                                1 for pm, _q, yy in dis if (pm > 0.5) == (yy == 1)) / len(dis), 1)
+                               if dis else None),
+                           # THE HALF THIS PANEL NEVER CARRIED: how often the MARKET was
+                           # right on exactly the bouts where the model claimed to know
+                           # better. It is currently 100.0 -- the model is 0 for 5 against
+                           # the price. "model right 0%" already reads badly, but a reader
+                           # cannot tell from it whether the market was any good on those
+                           # same bouts or whether they were all coin-flips nobody called.
+                           # There are no draws in this ledger so the two sum to 100; it is
+                           # counted rather than derived so it stays correct if that changes.
+                           "disagree_market_right": (round(100 * sum(
+                               1 for _p, qm, yy in dis if (qm > 0.5) == (yy == 1)) / len(dis), 1)
                                if dis else None)}
     return panel
 
@@ -260,6 +278,18 @@ def selftest():
     # disagreements: Fiziev (model f1 vs market f2) -> model wrong there
     assert m["n"] == 2 and m["acc"] == 50.0
     assert m["disagree_n"] == 1 and m["disagree_model_right"] == 0.0
+    # BOTH HALVES OF THE DISAGREEMENT. The panel used to publish only the model's rate
+    # on the bouts where it took the other side of the price. On the one disagreement
+    # here the model said f1, the market said f2, and f2 won: model 0%, market 100%.
+    assert m["disagree_market_right"] == 100.0, m
+    # no draws in this ledger, so the two sum to 100 -- asserted so that a future change
+    # (a draw/NC settling as anything but a void) has to come back through this test.
+    assert m["disagree_model_right"] + m["disagree_market_right"] == 100.0, m
+    # model_acc is over the priced subset, the same games market["acc"] is over. Both
+    # graded bouts carry a q1 here, so it equals the overall acc -- the point is that it
+    # is COMPUTED over M rather than reusing panel["acc"], which stops being comparable
+    # the moment one bout logs without a consensus price.
+    assert m["model_acc"] == 0.0, m
     n2, _ = grade_all(rcsv, delta_csv=_nodelta)
     assert n2 == 0                                  # idempotent grading
     json.dumps(p)

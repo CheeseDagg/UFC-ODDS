@@ -27,6 +27,23 @@ jobs:
         with: { python-version: "3.12" }
       - name: Install deps
         run: pip install pandas requests
+      # NO GATE OF ANY KIND ran in front of the job that rebuilds and publishes the
+      # board. Nine modules on this path ship a --selftest and this workflow ran none
+      # of them, so a change to the refresh gate, the temperature fit, the grader or
+      # the blend router would have published silently and on schedule. selftest_ui.js
+      # covers the render layer, which had no test at all: validate_build.py guards the
+      # ratings payload and nothing guarded the JavaScript that turns ledger.json into
+      # the one sentence on the site that says whether the model works.
+      - name: Selftest gate
+        working-directory: Github
+        run: |
+          for m in ufc_grade ufc_gates ufc_temperature ufc_blend_predict ufc_delta_bouts \
+                   ufc_results_update ufc_layage_gate refresh_odds build_site; do
+            echo "== $m"; python $m.py --selftest || exit 1
+          done
+      - name: Render-layer gate
+        working-directory: Github
+        run: node selftest_ui.js
       - name: Fetch + gate + rebuild (only if card matches pin)
         working-directory: Github
         env:
@@ -35,6 +52,16 @@ jobs:
       - name: Blend A/B log (fail-soft)
         working-directory: Github
         run: python ufc_blend_predict.py || true
+      # The gate above ran against the docs that were already committed. This one runs
+      # the same harness against the docs this job just rebuilt, so a rebuild that ships
+      # a panel out of sync with the template -- or a ledger.json shape the panel cannot
+      # render -- fails here instead of on the reader's screen. Skipped when nothing was
+      # rebuilt, because then there is nothing new to check.
+      - name: Render-layer gate (rebuilt docs)
+        working-directory: Github
+        run: |
+          [ "$(cat .refresh_status 2>/dev/null)" = "rebuilt" ] || { echo "nothing rebuilt — skip"; exit 0; }
+          node selftest_ui.js
       - name: Commit if rebuilt
         run: |
           [ "$(cat Github/.refresh_status 2>/dev/null)" = "rebuilt" ] || { echo "no publish ($(cat Github/.refresh_status 2>/dev/null))"; exit 0; }

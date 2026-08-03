@@ -22,6 +22,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # This job publishes Github/docs verbatim, so whatever is committed there goes
+      # straight to readers with nothing in between. The render harness is the only
+      # thing that can tell a hand-committed home build from one that is out of sync
+      # with the template -- docs/index.html is 2.9MB of inlined data and a stale panel
+      # looks identical to a current one. No python, no deps: just the render check.
+      - name: Render-layer gate
+        working-directory: Github
+        run: node selftest_ui.js
       - uses: actions/upload-pages-artifact@v3
         with:
           path: Github/docs

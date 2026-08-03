@@ -5378,10 +5378,35 @@ try{ renderWatch(); }catch(e){}
       h='<b>'+L.n+'</b> settled bouts: model favorite won <b>'+L.acc+'%</b> (Brier '+L.brier+')'+(L.voids?' · '+L.voids+' voided':'')+'.';
       if(L.market && L.market.n){
         var m=L.market;
-        h+=' Against the closing consensus on the same bouts: market <b>'+m.acc+'%</b>.';
+        /* "on the same bouts" was an assertion, not a fact: L.acc is over every settled
+           bout and m.acc can only be over the ones that carried a devigged consensus.
+           They are the same set today and stop being so the moment one bout logs without
+           a price. m.model_acc is computed over the market's own subset, so the sentence
+           is now true by construction rather than by luck. */
+        var _ma=(m.model_acc!=null?m.model_acc:L.acc);
+        h+=' Against the closing consensus on the same <b>'+m.n+'</b> bouts: model <b>'+_ma+'%</b> · market <b>'+m.acc+'%</b>.';
         if(m.disagree_n){
           var col=(m.disagree_model_right>=50)?'#4ad6a2':'#e06c75';
-          h+=' When model and market picked <i>opposite corners</i> ('+m.disagree_n+' bouts): model right <b style="color:'+col+'">'+m.disagree_model_right+'%</b>.';
+          h+=' When model and market picked <i>opposite corners</i> ('+m.disagree_n+' bouts): model right <b style="color:'+col+'">'+m.disagree_model_right+'%</b>';
+          /* The half this panel never carried. "model right 0%" does not tell a reader
+             whether the market called those bouts either -- they could all have been
+             coin-flips nobody got. It went 5 for 5. */
+          h+=(m.disagree_market_right!=null?', market right <b>'+m.disagree_market_right+'%</b>.':'.');
+        }
+        /* SAY IT. The forward record is the one number on this page that is not a
+           backtest, and it currently says the model is worse than a coin flip while the
+           price it disagrees with is not. A reader who scrolls past three panels of
+           ratings should not have to assemble that themselves. The n is stated in the
+           same breath, because at these sample sizes the verdict is a direction and not
+           a measurement -- one card can move every figure above by double digits. */
+        var _w=(m.model_acc!=null?m.model_acc:L.acc);
+        if(m.acc>_w){
+          h+=' <b style="color:#e06c75">On this sample the market is the better forecast'+
+             (m.disagree_n&&m.disagree_market_right>m.disagree_model_right?
+               ', and taking the model\'s side against it has not won yet':'')+
+             '.</b> <span style="opacity:.75">'+m.n+' bouts is far too few to measure a model by — '+
+             'this is a direction, not a verdict, and one card can move it double digits. '+
+             'Treat these numbers as a reason to keep grading, not as an edge.</span>';
         }
       }
       h+=' <span style="opacity:.65">Every number logged pre-fight — nothing retro-fitted.</span>';
