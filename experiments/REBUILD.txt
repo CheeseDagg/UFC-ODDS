@@ -1,1 +1,1 @@
-weigh-in refresh 2026-07-24T14:31:31Z
+rebuild requested 2026-08-03T22:47Z — key/pin just landed, run now instead of waiting for the cron
