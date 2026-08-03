@@ -20,6 +20,21 @@ import json, sys, re, statistics, unicodedata, argparse, pathlib
 SHARP  = {"Pinnacle", "Circa", "BetOnline", "Bookmaker"}
 PUBLIC = {"DraftKings", "FanDuel", "BetMGM", "Caesars", "BetRivers", "HardRockBet"}
 
+# BOOKS THE BETS ACTUALLY GET PLACED AT.
+# "best price" used to be max() over all 20 books in the feed -- Polymarket,
+# YouWager, Stake, Cloudbet, Bovada, 4casters, Bet105. On the Aug 8 card that
+# made 18 of 18 headline prices unplaceable, and every one of the six fights the
+# site flagged as "the one line on this fight worth taking" was NEGATIVE EV at
+# the book the money is actually at:
+#     Elkins  +561 YouWager  (+6.2%)  ->  +450 FanDuel  (-11.7%)
+#     Lemos   +223 Polymarket(+4.7%)  ->  +190 FanDuel  ( -6.0%)
+#     Goff    +265 Circa     (+2.7%)  ->  +230 FanDuel  ( -7.2%)
+# A price you cannot take is not a better price; it is a worse number wearing a
+# green badge. BETTABLE is the whitelist. Everything outside it still feeds the
+# consensus, the sharp line and the hold -- those want the widest possible
+# market -- but nothing outside it can be quoted as YOUR price.
+BETTABLE = {"FanDuel"}
+
 
 def nm(s):
     """Normalize a name: strip accents, lowercase, drop non-alphanumerics.
@@ -110,12 +125,22 @@ def parse_event(J):
         sharp1 = statistics.median(sharp) if sharp else None
         public1 = statistics.median(public) if public else None
 
-        # ---- best available price, computed from the cleaned books only ----
+        # ---- best PLACEABLE price, computed from the cleaned books only ----
         # (highest American number = most favorable to the bettor on each side)
-        c1 = [(r["a1"], r["book"]) for r in good if r["a1"] is not None]
-        c2 = [(r["a2"], r["book"]) for r in good if r["a2"] is not None]
-        best1, best1book = (max(c1, key=lambda x: x[0]) if c1 else (feed_best1, None))
-        best2, best2book = (max(c2, key=lambda x: x[0]) if c2 else (feed_best2, None))
+        # Restricted to BETTABLE. If no bettable book priced this side, best* is
+        # None and best*book is None -- the UI must then say "not quoted at your
+        # book" rather than quoting an offshore number as though it were takeable.
+        c1 = [(r["a1"], r["book"]) for r in good if r["a1"] is not None and r["book"] in BETTABLE]
+        c2 = [(r["a2"], r["book"]) for r in good if r["a2"] is not None and r["book"] in BETTABLE]
+        best1, best1book = (max(c1, key=lambda x: x[0]) if c1 else (None, None))
+        best2, best2book = (max(c2, key=lambda x: x[0]) if c2 else (None, None))
+        # The old all-books number is still worth SEEING -- it is how you know the
+        # market is somewhere else -- it just must never be the one labelled "best
+        # price" or fed into an EV calculation. Kept under a name nothing prices off.
+        o1 = [(r["a1"], r["book"]) for r in good if r["a1"] is not None]
+        o2 = [(r["a2"], r["book"]) for r in good if r["a2"] is not None]
+        off1, off1book = (max(o1, key=lambda x: x[0]) if o1 else (feed_best1, None))
+        off2, off2book = (max(o2, key=lambda x: x[0]) if o2 else (feed_best2, None))
 
         # Median ACTUAL (vigged) price per side, the market hold, and the real
         # per-fight line-shop edge = how much the best book beats the typical one,
@@ -138,6 +163,9 @@ def parse_event(J):
             "am1": p_to_am(cons1), "am2": p_to_am(1 - cons1),
             "best1": best1, "best2": best2,
             "best1book": best1book, "best2book": best2book,
+            # informational only — the best number anywhere in the feed, including
+            # books that cannot be bet. Never price, rank or EV off these.
+            "any1": off1, "any2": off2, "any1book": off1book, "any2book": off2book,
             "med1am": p_to_am(med1_raw) if med1_raw is not None else None,
             "med2am": p_to_am(med2_raw) if med2_raw is not None else None,
             "shop1": round(shop1, 4) if shop1 is not None else None,

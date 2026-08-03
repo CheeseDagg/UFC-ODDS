@@ -400,6 +400,13 @@ header{position:relative}
 .market .mk-row b{color:var(--ink);font-weight:600}
 .market .mk-k{display:inline-block;min-width:96px;font-family:"Saira Condensed",sans-serif;text-transform:uppercase;letter-spacing:.05em;font-size:10px;color:var(--faint);vertical-align:baseline}
 .market .mk-shop{color:var(--gold);font-weight:600}
+/* Unplaceable prices. Everything marked .dim is a number from a book the slip
+   can't be placed at -- shown as market context, never as your price. The class
+   was referenced by the market row and the parlay table before it existed, so
+   "not placeable" text rendered at full weight beside real prices. */
+.dim{color:var(--faint);font-weight:400}
+.parlay-row.dim{opacity:.55}
+.parlay-row.dim .parlay-book,.parlay-row.dim .parlay-odds,.parlay-row.dim .parlay-payout{color:var(--faint)}
 .market .mk-row.mk-sharpedge{background:var(--surface2);border-radius:5px;padding:5px 8px;margin-top:8px}
 .market .mk-edge{color:var(--pos)!important;font-weight:700}
 .market .mk-note{font-size:10px;color:var(--muted);font-style:italic;margin-top:9px;line-height:1.42;border-top:1px solid var(--hair2);padding-top:8px}
@@ -2296,10 +2303,12 @@ function sharpFair1(O){
   }
   return wsum>0 ? {p:psum/wsum, n:used} : null;
 }
-// ---- Best price across the user's sportsbooks (live card) ----
-// Only books the fightodds feed actually tracks. The user also bets Fanatics, Bet365,
-// ScoreBet, which the feed does NOT cover -> flagged in the UI as check-by-hand.
-const MY_BOOKS=['FanDuel','DraftKings','BetRivers'];
+// ---- Best price at the book the bets actually go to (live card) ----
+// This was ['FanDuel','DraftKings','BetRivers'] and it was still wrong: the legs
+// have to sit on ONE slip, so a number at DraftKings is not a number you can use.
+// On the Aug 8 card the panel's single "positive" row was Elkins +525 DraftKings
+// at +0.4%; the same side is +450 at FanDuel, which is -11.7%. One book.
+const MY_BOOKS=['FanDuel'];
 function _bestAtMyBooks(books,idx){ // idx: 1 or 2 (American odds for side1/side2)
   let best=null,bk=null;
   for(let i=0;i<books.length;i++){ const e=books[i]; if(MY_BOOKS.indexOf(e[0])<0) continue;
@@ -2359,11 +2368,22 @@ function marketSection(a,b){
     '<span class="mk-ev">'+O.nbooks+' book'+(O.nbooks===1?'':'s')+(O.event?' \u00b7 '+O.event:'')+'</span></div>';
   h+='<div class="mk-cons"><span>'+lan+' '+probToAmerican(consA)+' &nbsp;/&nbsp; '+lbn+' '+probToAmerican(1-consA)+'</span>'+
      '<span class="mk-pct">no-vig '+Math.round(consA*100)+'% / '+Math.round((1-consA)*100)+'%'+holdTxt+'</span></div>';
-  // best price across books + the real per-fight line-shop edge (the one durable edge)
-  if(bestA!=null && bestB!=null){
+  // YOUR price + the per-fight line-shop edge. best1/best2 are now restricted to
+  // BETTABLE books upstream (parse_fightodds.py), so this row can only ever quote
+  // a number that can actually be placed. When your book has not posted the fight,
+  // say so out loud and show the offshore number as context, greyed -- the old code
+  // quoted Polymarket/YouWager here under the heading "Best price", which read as
+  // "this is where you would place it" and was wrong on 18 of 18 sides.
+  {
     const sv=(v,med)=>(v!=null&&v>=0.01)?' <span class="mk-shop">+'+(v*100).toFixed(1)+'</span> vs '+amF(med):'';
-    h+='<div class="mk-row"><span class="mk-k">Best price</span> <b>'+lan+' '+amF(bestA)+'</b>'+(bestAbk?' ('+bestAbk+')':'')+sv(shopA,medA)+
-       ' \u00b7 <b>'+lbn+' '+amF(bestB)+'</b>'+(bestBbk?' ('+bestBbk+')':'')+sv(shopB,medB)+'</div>';
+    const anyA = aF1?O.any1:O.any2, anyAbk = aF1?O.any1book:O.any2book;
+    const anyB = aF1?O.any2:O.any1, anyBbk = aF1?O.any2book:O.any1book;
+    const side=(nmL,b,bk,sh,md,an,ak)=> b!=null
+      ? '<b>'+nmL+' '+amF(b)+'</b>'+(bk?' ('+bk+')':'')+sv(sh,md)
+      : '<span class="dim">'+nmL+' not quoted at your book'+(an!=null?' \u00b7 '+amF(an)+' at '+(ak||'another book')+', not placeable':'')+'</span>';
+    h+='<div class="mk-row"><span class="mk-k">Your price</span> '+
+       side(lan,bestA,bestAbk,shopA,medA,anyA,anyAbk)+' \u00b7 '+
+       side(lbn,bestB,bestBbk,shopB,medB,anyB,anyBbk)+'</div>';
   }
   // sharp-book-weighted fair line (the best true-price estimate) + the one genuinely
   // actionable line-shop read: a price that beats the sharp number is one the sharp
@@ -2373,13 +2393,20 @@ function marketSection(a,b){
     const sfA = aF1 ? sf.p : 1-sf.p;
     h+='<div class="mk-row"><span class="mk-k">Sharp fair line</span> <b>'+lan+' '+probToAmerican(sfA)+'</b> &nbsp;/&nbsp; <b>'+lbn+' '+probToAmerican(1-sfA)+'</b>'+
        ' <span class="mk-pct">no-vig '+Math.round(sfA*100)+'% / '+Math.round((1-sfA)*100)+'% \u00b7 '+sf.n+' sharp book'+(sf.n===1?'':'s')+', Pinnacle-weighted</span></div>';
-    if(bestA!=null && bestB!=null){
-      const evA = sfA*_amDec(bestA)-1, evB = (1-sfA)*_amDec(bestB)-1;
-      const top = evA>=evB ? {ev:evA,side:lan,price:bestA,book:bestAbk} : {ev:evB,side:lbn,price:bestB,book:bestBbk};
-      h+='<div class="mk-row mk-sharpedge"><span class="mk-k">Best vs sharp</span> '+
-        (top.ev>=0.01
+    // EV is measured on YOUR price only. It used to be measured on the best number
+    // anywhere in the feed, which is how six fights on one card got flagged "worth
+    // taking" while all six were negative EV at the book the money is at.
+    {
+      const cand=[];
+      if(bestA!=null) cand.push({ev:sfA*_amDec(bestA)-1, side:lan, price:bestA, book:bestAbk});
+      if(bestB!=null) cand.push({ev:(1-sfA)*_amDec(bestB)-1, side:lbn, price:bestB, book:bestBbk});
+      const top = cand.length ? cand.reduce((x,y)=>y.ev>x.ev?y:x) : null;
+      h+='<div class="mk-row mk-sharpedge"><span class="mk-k">Your price vs sharp</span> '+
+        (!top
+          ? 'neither side is quoted at your book \u2014 nothing to take on this fight.'
+          : top.ev>=0.01
           ? '<b class="mk-edge">'+top.side+' '+amF(top.price)+'</b>'+(top.book?' ('+top.book+')':'')+' pays <b class="mk-edge">+'+(top.ev*100).toFixed(1)+'%</b> over the sharp fair line \u2014 a number the sharp market hasn\u2019t reached. If you trust the sharp price, this is the one line on this fight worth taking.'
-          : 'no book is priced better than the sharp fair line \u2014 nothing to grab here; the soft books are already in line with the sharps.')+'</div>';
+          : 'your book is not priced better than the sharp fair line \u2014 nothing to grab here (best of the two: '+top.side+' '+amF(top.price)+', '+(top.ev*100).toFixed(1)+'%).')+'</div>';
     }
   }
   // recent line movement from oddsPrev
@@ -2493,6 +2520,10 @@ function marketChip(ra,rb){
   if(!O) return '';
   const rF1=nmO(ra)===nmO(O.f1);
   const consR=rF1?O.cons1:O.cons2;
+  // best1/best2 are now BETTABLE-only upstream, so either can be null when your
+  // book has not posted that side. amF(null) renders the literal string "null"
+  // (null>0 is false, so it falls through to ''+null) -- the row used to be able
+  // to publish "· best null / null" on any unquoted fight.
   const bestR=rF1?O.best1:O.best2, bestB=rF1?O.best2:O.best1;
   const lr=ra.split(' ').slice(-1)[0], lb=rb.split(' ').slice(-1)[0];
   let flag='';
@@ -2500,8 +2531,13 @@ function marketChip(ra,rb){
   if(sp>=0.02) flag+=' <span class="uo-flag">\u26a1 sharp split</span>';
   const mv=(O.move1==null)?null:(rF1?O.move1:-O.move1);
   if(mv!=null && Math.abs(mv)>=0.02) flag+=' <span class="uo-flag">\u2197 '+(mv>0?lr:lb)+'</span>';
+  // "best" now means "best at YOUR book", so name the book in the label rather
+  // than implying a shop across a market you cannot place into.
+  const yb = (bestR==null && bestB==null)
+    ? ' <span class="uo-best dim">\u00b7 not quoted at your book</span>'
+    : ' <span class="uo-best">\u00b7 yours '+(bestR==null?'\u2014':amF(bestR))+' / '+(bestB==null?'\u2014':amF(bestB))+'</span>';
   return '<div class="upc-odds">'+lr+' '+probToAmerican(consR)+' / '+lb+' '+probToAmerican(1-consR)+
-         ' <span class="uo-best">\u00b7 best '+amF(bestR)+' / '+amF(bestB)+'</span>'+flag+'</div>';
+         yb+flag+'</div>';
 }
 
 
@@ -4026,11 +4062,31 @@ function computeParlay(){
   if(!rows.length){ res.innerHTML='<div class="parlay-hint">No single sportsbook prices all of these legs.</div>'; return; }
   rows.sort((a,b)=>b.dec-a.dec);
   const stake=Math.max(1, parseFloat(document.getElementById('parlayStake').value)||100);
+  const nLeg=legs.length;
+  // THE PARLAY MUST SIT ON ONE SLIP AT ONE BOOK YOU ACTUALLY HAVE. This block
+  // used to headline rows[0] -- the best decimal anywhere in the 20-book feed --
+  // as "<book> pays the most on this N-leg parlay". On a 3-leg test that printed
+  // Polymarket $426.77 while the same three legs at FanDuel pay $390.04: a
+  // $36.73-per-$100 overstatement of a ticket that cannot be placed. The headline
+  // and the EV below are now YOUR book. Everything else stays visible underneath,
+  // clearly marked as unplaceable, because knowing the market is elsewhere is
+  // still worth seeing -- it just isn't your payout.
+  const mine=rows.filter(r=>MY_BOOKS.indexOf(r.book)>=0);
+  const you=mine.length?mine[0]:null;
   const best=rows[0], worst=rows[rows.length-1];
-  const bestPay=stake*best.dec, worstPay=stake*worst.dec, nLeg=legs.length;
-  let headline='<div class="parlay-headline"><b>'+best.book+'</b> pays the most on this '+nLeg+'-leg parlay: <b>$'+bestPay.toFixed(2)+'</b> on $'+stake.toFixed(0)+' ('+amStr(decToAm(best.dec))+').';
-  if(rows.length>1 && bestPay-worstPay>=0.01) headline+=' That\u2019s $'+(bestPay-worstPay).toFixed(2)+' more than the worst-priced book ('+worst.book+').';
-  headline+='</div>';
+  let headline;
+  if(!you){
+    const miss=MY_BOOKS.join('/');
+    headline='<div class="parlay-headline">'+miss+' does not price all '+nLeg+' legs, so this ticket cannot be placed as one slip. '+
+      'Best anywhere in the feed is <b>'+best.book+'</b> at '+amStr(decToAm(best.dec))+' ($'+(stake*best.dec).toFixed(2)+') \u2014 <b>not placeable</b>, shown for context only.</div>';
+  }else{
+    const youPay=stake*you.dec;
+    headline='<div class="parlay-headline">At <b>'+you.book+'</b> this '+nLeg+'-leg parlay pays <b>$'+youPay.toFixed(2)+'</b> on $'+stake.toFixed(0)+' ('+amStr(decToAm(you.dec))+').';
+    if(best.book!==you.book && best.dec>you.dec+1e-9){
+      headline+=' <span class="dim">'+best.book+' shows '+amStr(decToAm(best.dec))+' ($'+(stake*best.dec).toFixed(2)+'), but the legs have to sit on one slip \u2014 that number is not yours to take.</span>';
+    }
+    headline+='</div>';
+  }
   // ── reality check: true no-vig probability, expected losing legs, weakest leg ──
   let realityHtml='';
   { const probs=[]; let allCons=true;
@@ -4039,25 +4095,35 @@ function computeParlay(){
     if(allCons && probs.length===legs.length && probs.length>=2){
       let trueP=1, expLoss=0, weak=probs[0];
       probs.forEach(x=>{ trueP*=x.p; expLoss+=(1-x.p); if(x.p<weak.p)weak=x; });
-      const tPct=trueP*100, evBest=trueP*best.dec-1;
+      // EV on the price you can actually get. Measuring it on the best decimal
+      // anywhere in the feed flattered every ticket by whatever the offshore
+      // books were paying over your book.
+      const evRef = you || best;
+      const tPct=trueP*100, evBest=trueP*evRef.dec-1;
       realityHtml='<div class="parlay-reality">'+
         '<div class="pr-title">Reality check</div>'+
         '<div class="pr-line">Cashes about <b>'+(tPct>=1?tPct.toFixed(1):tPct.toFixed(2))+'%</b> of the time \u2014 true no-vig price \u2248 <b>'+amStr(decToAm(1/trueP))+'</b>.</div>'+
         '<div class="pr-line">Expect to lose about <b>'+expLoss.toFixed(1)+' of '+probs.length+'</b> legs. Weakest: <b>'+weak.name+'</b> (~'+Math.round(weak.p*100)+'% to win).</div>'+
-        '<div class="pr-line '+(evBest>=0?'pr-pos':'pr-neg')+'">Even at the best price above, about <b>'+(evBest>=0?'+':'')+(evBest*100).toFixed(1)+'%</b> expected \u2014 every leg stacks another slice of the book\u2019s margin.</div>'+
+        '<div class="pr-line '+(evBest>=0?'pr-pos':'pr-neg')+'">At '+(you?'your price ('+evRef.book+')':evRef.book+'\u2019s price \u2014 which you cannot take')+', about <b>'+(evBest>=0?'+':'')+(evBest*100).toFixed(1)+'%</b> expected \u2014 every leg stacks another slice of the book\u2019s margin.</div>'+
         '</div>';
     }
   }
   const colhead='<div class="parlay-colhead"><span style="width:20px;text-align:right">#</span><span style="flex:1">Book</span><span style="width:62px;text-align:right">Odds</span><span style="width:92px;text-align:right">Returns</span></div>';
-  const list=rows.map((r,i)=>'<div class="parlay-row'+(i===0?' best':'')+'">'+
+  // The green "best" badge used to land on whichever book had the biggest number,
+  // which on most cards is a book the slip can't be placed at. It now marks YOUR
+  // book; every other row is dimmed and labelled, so the highest number on screen
+  // can never be mistaken for the one you'd collect.
+  const list=rows.map((r,i)=>{ const isYou=MY_BOOKS.indexOf(r.book)>=0;
+    return '<div class="parlay-row'+(isYou?' best':' dim')+'">'+
       '<span class="parlay-rank">'+(i+1)+'</span>'+
-      '<span class="parlay-book">'+r.book+(i===0?' <em>best</em>':'')+'</span>'+
+      '<span class="parlay-book">'+r.book+(isYou?' <em>yours</em>':'')+'</span>'+
       '<span class="parlay-odds">'+amStr(decToAm(r.dec))+'</span>'+
       '<span class="parlay-payout">$'+(stake*r.dec).toFixed(2)+'</span>'+
-    '</div>').join('');
+    '</div>'; }).join('');
   let note='<div class="parlay-note">'+rows.length+' of '+(rows.length+dropped.length)+' books price all '+nLeg+' legs.';
   if(dropped.length) note+=' Dropped (missing a leg): '+dropped.join(', ')+'.';
-  note+=' Returns include your stake. Each book\u2019s own moneyline, multiplied across legs; odds move \u2014 confirm at the book before betting.</div>';
+  note+=' Only '+MY_BOOKS.join('/')+' rows are placeable \u2014 the legs have to sit on one slip at one book. '+
+    'Returns include your stake. Each book\u2019s own moneyline, multiplied across legs; odds move \u2014 confirm at the book before betting.</div>';
   res.innerHTML=headline+realityHtml+colhead+list+note;
 }
 

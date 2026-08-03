@@ -416,9 +416,44 @@ def _trusted_name(display, slug):
     # shared surname carries it, which is exactly the case that must be caught.
     def near(a, b):
         return difflib.SequenceMatcher(None, a, b).ratio() >= SLUG_MATCH
-    if near(dt_[0], st_[0]) and near(dt_[-1], st_[-1]):
+    # Compare ANY given token to ANY given token, not first-to-first. The slug
+    # frequently carries a middle name the display name omits:
+    # 'carlos-diego-ferreira-3134' beside the display 'Diego Ferreira' is one man,
+    # but first-to-first reads 'diego' vs 'carlos', declares a swap, and hands back
+    # a three-token string that ufc_grade.resolve() then cannot match at all --
+    # turning a correctly-labelled bout into a silently skipped one.
+    dg, sg = (dt_[:-1] or dt_), (st_[:-1] or st_)
+    if near(dt_[-1], st_[-1]) and any(near(a, b) for a in dg for b in sg):
         return display
     return sname                     # trust the ID-backed slug over free text
+
+
+def resolve_bout_name(display, slug, keys):
+    """The ONE place a bout's fighter becomes a key in the ratings file.
+
+    _trusted_name picks which of the two strings to believe; this then gets that
+    string onto a rating, and the two steps have to be taken together because the
+    string _trusted_name hands back is not always in a form ufc_grade.resolve()
+    can match. Concretely: when the slug wins, the slug's stem often carries a
+    middle name the dataset does not use — 'carlos diego ferreira' for the
+    lightweight the file calls 'Diego Ferreira'. resolve() anchors on toks[0], so
+    it looks for a stem beginning 'carl' and finds nothing. Before this, the whole
+    bout was dropped: no ledger row, no price, no trace.
+
+    The retry drops the middle tokens and tries each given name with the surname,
+    and — exactly like resolve() itself — accepts the result ONLY when every
+    surviving attempt lands on the same key. Six Magomedovs must never be guessed
+    between, and a middle name is not a licence to start guessing."""
+    tn = _trusted_name(display, slug)
+    k = ufc_grade.resolve(tn, keys)
+    if k:
+        return k
+    t = _toks(tn)
+    if len(t) < 3:
+        return None
+    hits = {ufc_grade.resolve(f"{g} {t[-1]}", keys) for g in t[:-1]}
+    hits.discard(None)
+    return hits.pop() if len(hits) == 1 else None
 
 
 def predict_card(state, pred_a, pred_b, dobs, values, cdate):
@@ -431,8 +466,8 @@ def predict_card(state, pred_a, pred_b, dobs, values, cdate):
     bouts, details = [], []
     STALE_YEARS = 6                        # a namesake guard, not a comeback penalty
     for v in values:
-        k1 = ufc_grade.resolve(_trusted_name(v.get("f1", ""), v.get("f1_slug")), keys)
-        k2 = ufc_grade.resolve(_trusted_name(v.get("f2", ""), v.get("f2_slug")), keys)
+        k1 = resolve_bout_name(v.get("f1", ""), v.get("f1_slug"), keys)
+        k2 = resolve_bout_name(v.get("f2", ""), v.get("f2_slug"), keys)
         # NAMESAKE GUARD (the 'Rick Davis 2006' bug): if the resolved history's last
         # fight is >6 years before this card, it is almost certainly a DIFFERENT person
         # with the same name (UFC re-signs almost nobody after 6+ years out). Treat the
@@ -777,6 +812,26 @@ def selftest():
     assert _trusted_name("Uros Medic", None) == "Uros Medic", "no slug -> display"
     assert _trusted_name("Vlasto \u010cepo", "vlasto-cepo-36708") == "Vlasto \u010cepo", \
         "accent folding failed: slug guard tripped on Cepo"
+    # A middle name in the slug is not a swap. First-to-first comparison read
+    # 'diego' vs 'carlos', declared these two different people, and handed back a
+    # three-token string that resolve() could not match -- so the Aug 8 Ferreira
+    # bout would have been dropped even after the display name was overruled.
+    assert _trusted_name("Diego Ferreira", "carlos-diego-ferreira-3134") == \
+        "Diego Ferreira", "slug's middle name was read as a different fighter"
+    assert _trusted_name("Cezar Ferreira", "carlos-diego-ferreira-3134") == \
+        "carlos diego ferreira", "wrong display name was trusted over its own slug"
+    # ...and the middle-name retry must then land it on the real rating, while
+    # refusing to guess when more than one fighter could be meant.
+    _mk = {"diegoferreira": "Diego Ferreira", "cezarferreira": "Cezar Ferreira"}
+    assert resolve_bout_name("Cezar Ferreira", "carlos-diego-ferreira-3134", _mk) == \
+        "diegoferreira", "middle-name retry failed to reach the right fighter"
+    # Ambiguity must refuse, not pick. Here NO given token matches on the first
+    # pass (resolve anchors on toks[0]='juan' and finds no juan*ferreira), so the
+    # retry runs and finds two different fighters -- one per middle name. Two
+    # answers is not an answer.
+    _amb = {"diegoferreira": "Diego Ferreira", "carlosferreira": "Carlos Ferreira"}
+    assert resolve_bout_name("Cezar Ferreira", "juan-diego-carlos-ferreira-9", _amb) is None, \
+        "middle-name retry guessed between two plausible fighters"
     # end to end: a bout whose display name points at a STRONG unrelated fighter
     # must be skipped, not priced off that fighter's record
     _st, _XA, _ya, _XB, _yb = build_state_and_data(bouts_csv, dobs, nodelta)

@@ -423,10 +423,30 @@ def main():
     html = html.replace("__ODDS_DATA__", odds_json)
     if "__ODDS_DATA__" in html:
         raise SystemExit("odds placeholder not replaced")
-    # odds freshness: use the parsed_odds.json modification date as the import date
+    # ODDS FRESHNESS. This used to read odds_path.stat().st_mtime, which under
+    # actions/checkout is always the CHECKOUT time -- i.e. the build date, never
+    # the fetch date. Proof it was lying: docs/index.html and
+    # output/ufc_skill_explorer.html shipped a byte-identical ODDS payload
+    # (sha1 6816692754a0) stamped "Aug 2, 2026" and "Aug 3, 2026". A staleness
+    # label that can only ever say "today" is worse than no label, because the
+    # line it sits next to reads "prices move -- confirm at the book before betting".
+    # docs/status.json carries the real fetch timestamp; use it, and say so
+    # honestly when it is missing rather than inventing one.
     try:
         import datetime as _dt
-        _asof = _dt.date.fromtimestamp(odds_path.stat().st_mtime).strftime("%b %-d, %Y") if (odds_path.exists() and n_odds) else ""
+        _asof = ""
+        if odds_path.exists() and n_odds:
+            _stp = OUT.parent / "docs" / "status.json"
+            _iso = ""
+            if _stp.exists():
+                try:
+                    _iso = (json.loads(_stp.read_text()) or {}).get("odds_asof", "") or ""
+                except Exception:
+                    _iso = ""
+            if _iso:
+                _asof = _dt.datetime.fromisoformat(_iso).strftime("%b %-d, %Y")
+            else:
+                _asof = "unknown"
     except Exception:
         _asof = ""
     html = html.replace("__ODDS_ASOF__", json.dumps(_asof))

@@ -110,7 +110,11 @@ def main():
         # (2026-08-01 shipped f2='Charles Oliveira' with slug
         # 'michael-oliveira-50272' -- a former champion priced into a fight he
         # was not in.)
-        from ufc_blend_predict import _trusted_name
+        # resolve_bout_name = _trusted_name + the middle-name retry. The slug that
+        # wins a swap often carries a middle name the dataset omits
+        # ('carlos-diego-ferreira-3134' for 'Diego Ferreira'), which resolve()
+        # alone cannot match, so the corrected bout was still being dropped.
+        from ufc_blend_predict import resolve_bout_name
         # A score difference is not a log-odds. Feeding it to a bare sigmoid --
         # which is what this line did until 2026-08-01 -- logged every bout at
         # 45-66% and made the forward ledger untestable: a model that never says
@@ -120,8 +124,8 @@ def main():
         _T, _ = ufc_temperature.load_T(HERE / "output" / "temperature.json")
         bouts = []
         for v in card.values():
-            k1 = ufc_grade.resolve(_trusted_name(v.get("f1", ""), v.get("f1_slug")), scores)
-            k2 = ufc_grade.resolve(_trusted_name(v.get("f2", ""), v.get("f2_slug")), scores)
+            k1 = resolve_bout_name(v.get("f1", ""), v.get("f1_slug"), scores)
+            k2 = resolve_bout_name(v.get("f2", ""), v.get("f2_slug"), scores)
             s1 = scores.get(k1) if k1 else None
             s2 = scores.get(k2) if k2 else None
             if s1 is None or s2 is None: continue
@@ -192,11 +196,17 @@ def selftest():
     chk(FLAGS == {"--local", "--selftest"}, "flag whitelist is exactly --local/--selftest")
 
     # the slug guard this build path now shares with the blend
-    from ufc_blend_predict import _trusted_name
+    from ufc_blend_predict import _trusted_name, resolve_bout_name
     chk(_trusted_name("Charles Oliveira", "michael-oliveira-50272") == "michael oliveira",
         "ledger step trusts the ID-backed slug over a wrong display name")
     chk(_trusted_name("Dennis Buzukja", "dennis-buzukia-29076") == "Dennis Buzukja",
         "harmless slug spelling drift does not trip the ledger guard")
+    _fk = {"diegoferreira": "Diego Ferreira", "cezarferreira": "Cezar Ferreira"}
+    chk(resolve_bout_name("Cezar Ferreira", "carlos-diego-ferreira-3134", _fk) == "diegoferreira",
+        "a slug carrying a middle name still reaches the right rating")
+    chk(resolve_bout_name("Charles Oliveira", "michael-oliveira-50272",
+                          {"charlesoliveira": "Charles Oliveira"}) is None,
+        "an unrateable fighter stays unrateable instead of borrowing a namesake")
 
     print(f"\n{ok[0]}/{ok[1]} checks pass")
     return 0 if ok[0] == ok[1] else 1
