@@ -382,6 +382,19 @@ def main():
         except Exception:
             pass
 
+    # The score->probability temperature, baked in so the browser cannot fall
+    # back to 1.0. It DID fall back to 1.0 for the entire life of the tool: the
+    # template hardcoded 1/(1+exp(-(s1-s2))) in six places, which is T=1, which
+    # is why the win bar never left the 45-65% band while the copy underneath it
+    # explained that away as "MMA is high-variance". Fitted in ufc_temperature.py;
+    # a missing file raises rather than defaulting, because the default is the bug.
+    import ufc_temperature
+    payload["T"], payload["pcap"] = ufc_temperature.load_T(OUT / "temperature.json")
+    try:
+        payload["tcal"] = json.loads((OUT / "temperature.json").read_text())
+    except Exception:
+        pass
+
     try:
         import pandas as pd
         ev = pd.read_csv(DATA / "ufc_event_details.csv")

@@ -103,13 +103,18 @@ def main():
         scores = {ufc_grade.norm(f["name"]): f.get("model_score") for f in _fl}
         u = list(_csv.DictReader(open(HERE / "odds" / "upcoming.csv")))
         cdate = (u[0].get("date") if u else "") or date
+        # Same temperature the site and build_site.py use. Before this, the
+        # refresh path logged bouts on a bare sigmoid (T=1) while the ledger it
+        # wrote into was being compared against a market that prices real gaps.
+        import ufc_temperature
+        _T, _ = ufc_temperature.load_T(HERE / "output" / "temperature.json")
         bouts = []
         for v in live.values():
             k1 = ufc_grade.resolve(v.get("f1", ""), scores)
             k2 = ufc_grade.resolve(v.get("f2", ""), scores)
             if not k1 or not k2: continue
             bouts.append({"f1": v["f1"], "f2": v["f2"],
-                          "p1": 1 / (1 + math.exp(-(scores[k1] - scores[k2]))),
+                          "p1": round(ufc_temperature.prob(scores[k1], scores[k2], _T), 4),
                           "q1": v.get("cons1")})
         nl = ufc_grade.log_card(name, cdate, bouts)
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")

@@ -19,12 +19,24 @@ DELTA = os.path.join(HERE, "data", "results_delta.csv")
 COLS = ["logged", "event", "date", "f1", "f2", "p1", "q1", "outcome"]
 VOID_DAYS = 14
 
-def norm(s):
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z]", "", s.lower())
-
 TRANSLIT = str.maketrans({"ł":"l","Ł":"l","ø":"o","Ø":"o","đ":"d","Đ":"d",
                            "ß":"ss","æ":"ae","Æ":"ae","þ":"th","ð":"d"})
+
+def norm(s):
+    # TRANSLIT runs BEFORE NFKD because these letters are atomic code points, not
+    # base+combining-mark pairs: NFKD leaves 'ł' intact and the ascii encode then
+    # DELETES it, so 'Błachowicz' silently became 'bachowicz'. Accented letters
+    # (Čepo, Janičić) do decompose and were always fine -- the bug was confined to
+    # the non-decomposing set above.
+    #
+    # This matters outside resolve(). resolve() papered over it with a second
+    # transliterated lookup, but _pair/_results_map/settle_row call norm() directly:
+    # a bout logged from the odds feed as 'Jan Blachowicz' produced the key
+    # 'janblachowicz' while the same bout scraped as 'Jan Błachowicz' produced
+    # 'janbachowicz', so the prediction could never settle and sat pending until
+    # it aged out as a void.
+    s = unicodedata.normalize("NFKD", (s or "").translate(TRANSLIT))
+    return re.sub(r"[^a-z]", "", s.encode("ascii", "ignore").decode().lower())
 
 def _ed1(a, b):
     """edit distance <= 1 (insert/delete/substitute) — cheap, exact."""
@@ -46,7 +58,15 @@ def resolve(name, keys):
     """name -> the norm-key in `keys` it denotes, or None. Tiers:
     exact -> transliterated exact -> token-anchored (last-name edit<=1 AND
     first-name prefix), accepted ONLY if exactly one candidate survives —
-    six Magomedovs must never be guessed between."""
+    six Magomedovs must never be guessed between.
+
+    Deliberately NOT loosened to (first-initial + surname). Measured against the
+    1228-fighter ratings file, that key is ambiguous in 22 buckets — 'Lerone
+    Murphy'/'Lauren Murphy' and 'Demetrious Johnson'/'DaMarques Johnson' among
+    them — so it would have to refuse those anyway, while the 4-char first-name
+    prefix below already accepts every unambiguous case. It also rescues nothing:
+    on the card that prompted the check, none of the unresolved fighters had a
+    surname present in the ratings file at all."""
     n = norm(name)
     if n in keys: return n
     n2 = norm((name or "").translate(TRANSLIT))
@@ -278,8 +298,36 @@ def selftest():
     assert resolve("Abusupiyan Magomedov", K) == norm("Abus Magomedov")
     assert resolve("Islam Magomedov", K) is None       # ambiguous surname -> refuse
     assert resolve("Matheus Camilo", K) is None        # genuinely absent
-    print("UFC LEDGER SELFTEST PASS — log/settle idempotent, accents, pair orientation, "
-          "void window, Brier exact, market disagreement live")
+    # NON-DECOMPOSING LETTERS. These are single code points, so NFKD alone leaves
+    # them for the ascii encode to delete. norm() must transliterate them itself:
+    # resolve() has a translit fallback but _pair/settle_row do not, and a settle
+    # key that disagrees with the logging key never matches.
+    assert norm("Jan Błachowicz") == "janblachowicz"
+    assert norm("Jan Błachowicz") == norm("Jan Blachowicz"), \
+        "diacritic and ascii spellings must produce ONE ledger key, else no settle"
+    assert norm("Michał Oleksiejczuk") == "michaloleksiejczuk"
+    assert norm("Jørgen Sørensen") == "jorgensorensen"
+    assert norm("Đorđe Weiß") == "dordeweiss"
+    # combining-mark accents already decomposed correctly; lock that in so the
+    # translit change above cannot regress them
+    assert norm("Vlasto Čepo") == "vlastocepo"
+    assert norm("Miloš Janičić") == "milosjanicic"
+    assert norm("Óscar Piñera") == "oscarpinera"
+    # the pair key is what actually settles a bout — it must survive the spelling
+    # the results scrape happens to use
+    assert _pair("Jan Blachowicz", "Navajo Stirling") == _pair("Jan Błachowicz", "Navajo Stirling")
+    # AMBIGUITY MUST REFUSE, NOT GUESS. A wrong resolution logs a prediction
+    # against a stranger's record, which is strictly worse than a dropped bout.
+    A = {norm(x) for x in ["Lerone Murphy", "Lauren Murphy", "Demetrious Johnson",
+                           "DaMarques Johnson", "Justin Tafa", "Junior Tafa"]}
+    assert resolve("L Murphy", A) is None      # shared initial+surname, two people
+    assert resolve("J Tafa", A) is None        # brothers -> refuse
+    assert resolve("D Johnson", A) is None
+    assert resolve("Lerone Murphy", A) == norm("Lerone Murphy")   # unambiguous still resolves
+    assert resolve("Demetrious Johnson", A) == norm("Demetrious Johnson")
+    print("UFC LEDGER SELFTEST PASS — log/settle idempotent, accents, non-decomposing "
+          "letters (ł/ø/đ/ß), pair orientation, ambiguity refused, void window, "
+          "Brier exact, market disagreement live")
     return 0
 
 if __name__ == "__main__":

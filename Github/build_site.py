@@ -111,6 +111,13 @@ def main():
         # 'michael-oliveira-50272' -- a former champion priced into a fight he
         # was not in.)
         from ufc_blend_predict import _trusted_name
+        # A score difference is not a log-odds. Feeding it to a bare sigmoid --
+        # which is what this line did until 2026-08-01 -- logged every bout at
+        # 45-66% and made the forward ledger untestable: a model that never says
+        # anything stronger than "slight lean" cannot be shown to be wrong.
+        # load_T raises if the fit is missing rather than falling back to 1.0.
+        import ufc_temperature
+        _T, _ = ufc_temperature.load_T(HERE / "output" / "temperature.json")
         bouts = []
         for v in card.values():
             k1 = ufc_grade.resolve(_trusted_name(v.get("f1", ""), v.get("f1_slug")), scores)
@@ -119,7 +126,7 @@ def main():
             s2 = scores.get(k2) if k2 else None
             if s1 is None or s2 is None: continue
             bouts.append({"f1": v["f1"], "f2": v["f2"],
-                          "p1": 1 / (1 + math.exp(-(s1 - s2))),
+                          "p1": round(ufc_temperature.prob(s1, s2, _T), 4),
                           "q1": v.get("cons1")})
         nl = ufc_grade.log_card(name, cdate, bouts)
         ng, panel = ufc_grade.grade_all(HERE / "data" / "fighter_bouts.csv")

@@ -52,13 +52,53 @@ def validate():
     ms = [f["model_score"] for f in F if f.get("model_score") is not None]
     if ms and (min(ms) < -6 or max(ms) > 6):
         errs.append(f"model_score out of sane logit range [{min(ms):.2f},{max(ms):.2f}]")
-    # every matchup probability is a valid 0-1
-    if len(ms) >= 2:
-        p = 1 / (1 + math.exp(-(max(ms) - min(ms))))
+    # ---- the score->probability temperature ----
+    # This block exists because the tool shipped for months with an implicit
+    # T=1. Nothing failed; the numbers were simply all wrong in the same
+    # direction, which is the kind of bug a validator has to be told to look for.
+    T = wd.get("T")
+    if not isinstance(T, (int, float)) or not (0.5 <= T <= 8.0):
+        errs.append(f"widget_data carries no usable temperature (T={T!r}); "
+                    f"run ufc_temperature.py — an absent T means the page "
+                    f"falls back to a coin flip for every matchup")
+        T = None
+    elif abs(T - 1.0) < 0.05:
+        errs.append(f"T={T} is the identity temperature — that is the bug "
+                    f"ufc_temperature.py was written to close, not a fit")
+    cap = wd.get("pcap", 0.90)
+
+    # every matchup probability is a valid 0-1, and the spread is not flat
+    if len(ms) >= 2 and T:
+        p = 1 / (1 + math.exp(-T * (max(ms) - min(ms))))
+        p = min(max(p, 1 - cap), cap)
         if not (0 < p < 1):
             errs.append("win probability not in (0,1)")
-        if p > 0.99:
-            warns.append(f"most-lopsided matchup is {p:.1%} — unusually confident; check temperature")
+        if p > cap + 1e-9:
+            errs.append(f"most-lopsided matchup {p:.1%} escaped the {cap:.0%} cap")
+        # The flatness guard. If the widest gap in the whole rated set still
+        # produces something near a coin flip, the conversion is broken again.
+        if p < 0.70:
+            errs.append(f"the most lopsided matchup in the file is only "
+                        f"{p:.1%} — the score scale and T disagree")
+
+    # ---- the ledger's probabilities must come off the same scale as the page ----
+    # A live prediction logged at T=1 while the site displays T!=1 is worse than
+    # either alone: the published record then grades a model nobody can see.
+    try:
+        import csv as _csv
+        led = list(_csv.DictReader(open(Path(__file__).parent / "data" / "ufc_predictions.csv")))
+        led += list(_csv.DictReader(open(Path(__file__).parent / "data" / "ufc_graded.csv")))
+        pv = [float(r["p1"]) for r in led if r.get("p1")]
+        if len(pv) >= 8:
+            flat = sum(abs(v - 0.5) for v in pv) / len(pv)
+            if flat < 0.06:
+                warns.append(
+                    f"logged predictions average only {flat:.3f} away from a "
+                    f"coin flip over {len(pv)} bouts — rows written before the "
+                    f"temperature fix; they grade a flatter model than the one "
+                    f"shipping now and should be read separately")
+    except Exception:
+        pass
 
     # ---- prospects ----
     pbad = [(p["name"], a, p["ratings"].get(a)) for p in P for a in AX

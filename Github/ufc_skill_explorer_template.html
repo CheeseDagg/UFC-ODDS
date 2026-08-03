@@ -900,6 +900,23 @@ fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
 
 <script>
 const DATA = __UFC_DATA__;
+// ── Score difference → win probability. THE ONLY PLACE THIS CONVERSION LIVES. ──
+// It used to live inline in six places, every one of them 1/(1+exp(-(s1-s2))) —
+// i.e. temperature 1. model_score is NOT in logit units; its spread is compressed
+// by roughly half, so T=1 squashed every matchup toward a coin flip. The most
+// lopsided call this tool ever published was 66% while the market on the same
+// card ran to 81%, and the copy below blamed that on MMA variance rather than on
+// the arithmetic. T is fitted in ufc_temperature.py (on the least-leaked era, so
+// it errs low) and baked in by build_widget.py. The cap is deliberate: a model
+// whose honest accuracy is ~62% never earns 99%.
+const WP_T = (typeof DATA.T === 'number' && DATA.T > 0) ? DATA.T : null;
+const WP_CAP = (typeof DATA.pcap === 'number') ? DATA.pcap : 0.90;
+function WP(sa, sb){
+  if (WP_T === null) return null;          // never silently degrade back to T=1
+  const p = 1/(1+Math.exp(-Math.max(-35, Math.min(35, WP_T*((sa||0)-(sb||0))))));
+  return Math.min(Math.max(p, 1-WP_CAP), WP_CAP);
+}
+const WPr = (a, b) => WP(a[C.score]||0, b[C.score]||0);   // the row-pair shape
 const _initHashStr = (typeof location!=='undefined' && location.hash) ? location.hash : '';  // capture before render()/switchTab can rewrite it
 // Market odds baked in from fightodds.io pulls (parse_fightodds.py). Keyed by a
 // sorted, accent-stripped fighter-name pair. Empty object when no pull imported.
@@ -1820,7 +1837,7 @@ function copyMatchupSummary(){
   const lines=['UFC Skill Profiles \u2014 '+fnames.join(' vs ')];
   if(selected.length===2 && selected.every(i=>i>=0)){
     const a=rows[selected[0]],b=rows[selected[1]];
-    const pa=Math.round(1/(1+Math.exp(-((a[C.score]||0)-(b[C.score]||0))))*100);
+    const pa=Math.round(WPr(a,b)*100);
     lines.push('Model win probability: '+a[C.name]+' '+pa+'% / '+b[C.name]+' '+(100-pa)+'%  (calibrated, ~60% accurate \u2014 not a betting edge)');
   } else if(selected.some(i=>i<0)){
     lines.push('(scouting preview \u2014 a prospect is involved, so no win probability)');
@@ -1872,9 +1889,9 @@ function buildComparisonCSV(){
   // win-probability footer when exactly two rated fighters
   if(selected.length===2 && selected.every(i=>i>=0)){
     const a=rows[selected[0]],b=rows[selected[1]];
-    const pa=Math.round(1/(1+Math.exp(-((a[C.score]||0)-(b[C.score]||0))))*100);
+    const pa=Math.round(WPr(a,b)*100);
     out.push([]); out.push(['Model win probability', a[C.name]+' '+pa+'%', b[C.name]+' '+(100-pa)+'%','']);
-    out.push(['Note','calibrated ~60% accurate; the market (~69%) beats it, so not a betting edge','','']);
+    out.push(['Note','calibrated ~62% accurate; the market (~69%) beats it, so not a betting edge','','']);
   } else if(selected.some(i=>i<0)){
     out.push([]); out.push(['Note','scouting preview \u2014 a sub-5-fight prospect is involved, so no win probability','','']);
   }
@@ -2383,7 +2400,7 @@ function marketSection(a,b){
   }
   // model vs market — same division only (cross-division model is unreliable)
   if(a[C.div]===b[C.div]){
-    const pa=1/(1+Math.exp(-((a[C.score]||0)-(b[C.score]||0)))), gap=pa-consA, gp=Math.round(Math.abs(gap)*100);
+    const pa=WPr(a,b), gap=pa-consA, gp=Math.round(Math.abs(gap)*100);
     const side=gap>0?lan:lbn, mModel=gap>0?pa:1-pa, mMkt=gap>0?consA:1-consA;
     // when the model is higher than the market on a side, the most common thing the
     // box-score model can't see but the market prices is age/decline — name it if it fits.
@@ -3137,7 +3154,7 @@ function rec(o){ return o.w+'\u2013'+o.l; }
 
 function threeWay(a,b,c){
   const fs=[a,b,c];
-  const wp=(x,y)=>1/(1+Math.exp(-((x[C.score]||0)-(y[C.score]||0))));
+  const wp=(x,y)=>WPr(x,y);
   let h='<div class="tott"><div class="tw-head">Three-way comparison</div>'+
     '<div class="tw-note">Model win probability for each head-to-head pairing. The skill table sits beside the radar above; full cards are below.</div>';
   [[0,1],[0,2],[1,2]].forEach(pr=>{
@@ -3148,7 +3165,7 @@ function threeWay(a,b,c){
        `<span class="tw-n r" style="color:${CORNERS[j].color}" title="${y[C.name]}">${y[C.name].split(' ').slice(-1)[0]}</span></div>`+
        (xdiv?'<div class="tw-xdiv">cross-division \u2014 less reliable</div>':'');
   });
-  h+='<div class="tw-foot">Each pairing uses the same calibrated win model as the two-fighter view. It rarely exceeds ~80% \u2014 MMA is high-variance.</div></div>';
+  h+='<div class="tw-foot">Each pairing uses the same calibrated win model as the two-fighter view, and is capped at 90% \u2014 a model that is right about 62% of the time has not earned more than that about anyone.</div></div>';
   return h;
 }
 function renderTott(){
@@ -3168,7 +3185,7 @@ function renderTott(){
     `<span class="nm l">${a[C.name]}</span><span class="vs">VS</span><span class="nm r">${b[C.name]}</span></div>`;
   html+=headToHead(a,b);
   // model win-probability prediction
-  const pa = 1/(1+Math.exp(-((a[C.score]||0)-(b[C.score]||0))));
+  const pa = WPr(a,b);
   const paP = Math.round(pa*100), pbP = 100-paP;
   const xdiv = a[C.div] !== b[C.div];
   const note = xdiv
@@ -3399,7 +3416,7 @@ function calibrationBlock(){
     `<div class="cal-sub">When the win bar shows a confidence, this is how often that pick actually won \u2014 measured only on fights the model had <b>not</b> seen when it was trained. The red bar is the real win rate; the dark tick is where it would land if the stated confidence were exactly right. Close tracking means the percentages are honest, not wishful.</div>`+
     rows+
     `<div class="cal-axis"><span></span><i><span>50%</span><span>75%</span><span>100%</span></i><span></span></div>`+
-    `<div class="cal-foot">Across all ${nfmt} held-out fights the model\u2019s favorite won ${(c.acc*100).toFixed(1)}% of the time (Brier ${c.brier.toFixed(3)}). Probabilities are temperature-calibrated (T=${c.T}); the tick marks perfect calibration. This is a check on the win bar you already see \u2014 nothing here is fed back into the model.</div>`+
+    `<div class="cal-foot">Across all ${nfmt} held-out fights the model\u2019s favorite won ${(c.acc*100).toFixed(1)}% of the time (Brier ${c.brier.toFixed(3)}). Probabilities are temperature-calibrated (T=${(DATA.T!=null?DATA.T:c.T)}, fitted on the least-leaked era so it errs low, and capped at ${Math.round(WP_CAP*100)}%); the tick marks perfect calibration. This is a check on the win bar you already see \u2014 nothing here is fed back into the model.</div>`+
     `</div>`;
 }
 document.getElementById('footer').innerHTML =
@@ -3407,7 +3424,7 @@ document.getElementById('footer').innerHTML =
   `ufcstats.com (via the daily-refreshed <a href="https://github.com/Greco1899/scrape_ufc_stats">Greco1899/scrape_ufc_stats</a> mirror)${DATA.through?`, current through <b>${DATA.through}</b>`:''}. Ratings count UFC bouts only — fights in other promotions (RIZIN, Bellator, PFL, etc.) aren't included, so a fighter's full career may be larger than shown. </div></details><details><summary>Method &amp; ratings</summary><div class="mac-body">`+
   `<b>Method:</b> striking, wrestling, grappling and power are opponent-adjusted with an iterative offense-vs-defense model (output against elite opposition counts more than padding against journeymen) and recency-weighted (3-year half-life), then normalized within division — 50 = division average, ~65 = +1 SD. Striking blends landed output (volume) with accuracy, so an efficient, accurate striker isn't graded as below-average just for low volume; striking defense is the share of opponents' significant strikes that fail to land, so grappling time isn't mistaken for head movement. `+
   `<b>Power</b> uses KO/TKO finishes and knockdowns (discounted by opponent durability), plus a one-shot factor — fewer strikes landed in the KO win means more power, so a 15-strike knockout outweighs a 100-strike accumulation TKO. A finish counts as power in proportion to whether it dropped the opponent: a clean knockdown is punching power, while a ground-and-pound stoppage with no knockdown is position, not power — so a wrestler's grappling TKOs aren't read as heavy hands. Ratings are weighted by the weight class the KOs happened in, then scaled across divisions (heavier hits harder). <b>Cardio</b> is sustained championship-round pace — total work (strikes, takedown attempts, and control time) maintained in rounds 3+, so a wrestler's grappling pace counts, not just punch volume. </div></details><details><summary>Validation &amp; honesty</summary><div class="mac-body">`+
-  `<b>Validation:</b> a regularized logistic model on these ratings predicts held-out fights at <b>~60% accuracy</b>, confirmed by walk-forward testing across six rolling time windows (1,200+ fights, no leakage) vs 50% for a coin flip. Durability was found to overfit (it stands in for "hasn't lost yet"), so its weight is capped, and extreme per-minute stat lines from very short finishes are winsorized — both improved out-of-sample accuracy. The score also folds in <b>strength of schedule</b> (a recency-weighted average of the quality of opponents actually beaten), which keeps stat-padders who feast on weak opposition from outranking proven contenders. Because regularization splits credit among correlated grappling stats and under-weights them, takedown and control offense are floored so dominant wrestlers and control-and-defense fighters aren't underrated — this raised walk-forward accuracy. The <b>Overall ranking</b> additionally applies a confidence penalty that scales with both sample size and competition quality, so a 5-fight prospect who beat weak opposition can't outrank a proven contender — but a newcomer who has already faced elites is trusted sooner. Probabilities are temperature-calibrated against out-of-sample results (Brier 0.234), so the win-probability bar above is honest — it rarely exceeds 80% because MMA rarely is. Gradient boosting and added age/form features were tested and didn't beat it. Specific style clashes and short-notice circumstances aren't captured by the win model, though separate lenses flag cage-size fit and control-resistance mismatches. The <b>Overall ranking</b> also adds a one-sided <b>control-resistance</b> bonus &mdash; being exceptionally hard to take down and hold is a structural edge a pure box-score model under-credits (total control shows up as quiet stat lines), so it lifts the most uncontrollable fighters. It is one-sided (it never penalizes anyone) and applies to the ranking only, not the matchup win-probability, which stays the pure accuracy-validated model. ${calibrationBlock()}</div></details><details><summary>What tends to win fights</summary><div class="mac-body">`+
+  `<b>Validation:</b> a regularized logistic model on these ratings predicts held-out fights at <b>~60% accuracy</b>, confirmed by walk-forward testing across six rolling time windows (1,200+ fights, no leakage) vs 50% for a coin flip. Durability was found to overfit (it stands in for "hasn't lost yet"), so its weight is capped, and extreme per-minute stat lines from very short finishes are winsorized — both improved out-of-sample accuracy. The score also folds in <b>strength of schedule</b> (a recency-weighted average of the quality of opponents actually beaten), which keeps stat-padders who feast on weak opposition from outranking proven contenders. Because regularization splits credit among correlated grappling stats and under-weights them, takedown and control offense are floored so dominant wrestlers and control-and-defense fighters aren't underrated — this raised walk-forward accuracy. The <b>Overall ranking</b> additionally applies a confidence penalty that scales with both sample size and competition quality, so a 5-fight prospect who beat weak opposition can't outrank a proven contender — but a newcomer who has already faced elites is trusted sooner. Probabilities are temperature-calibrated against out-of-sample results, so the win-probability bar above is honest. The temperature matters more than it sounds: <b>a model score is not a log-odds</b>, and this page spent months converting one to the other as though it were. That squashed every matchup toward a coin flip — the most lopsided call the tool could produce was 66%, while the market on the same card ran past 80%, and the gap was blamed on MMA variance rather than on the arithmetic. The scale is now fitted, and fitted on purpose against the OLDEST fights on record, where the recency-weighted ratings retain the least memory of the result they are being graded on — fitting it on recent fights returns a number almost twice as confident, which is leakage wearing the costume of skill. Gradient boosting and added age/form features were tested and didn't beat it. Specific style clashes and short-notice circumstances aren't captured by the win model, though separate lenses flag cage-size fit and control-resistance mismatches. The <b>Overall ranking</b> also adds a one-sided <b>control-resistance</b> bonus &mdash; being exceptionally hard to take down and hold is a structural edge a pure box-score model under-credits (total control shows up as quiet stat lines), so it lifts the most uncontrollable fighters. It is one-sided (it never penalizes anyone) and applies to the ranking only, not the matchup win-probability, which stays the pure accuracy-validated model. ${calibrationBlock()}</div></details><details><summary>What tends to win fights</summary><div class="mac-body">`+
   `Breaking <b>2,300+ out-of-sample fights</b> (each fighter rated <i>before</i> the bout, so no circularity) down by skill, division, and finish type surfaced a few robust patterns. All are descriptive \u2014 none is fed into the model, and the market already prices them.<br><br>`+
   `\u2022 <b>Defense beats offense.</b> Striking <i>defense</i> \u2014 not getting hit \u2014 is the single strongest predictor of winning (AUC 0.60), well ahead of offensive striking volume (0.53). Avoiding damage wins more than output does, and the gap has held or widened in recent years.<br>`+
   `\u2022 <b>Reach is overrated on average</b> (AUC 0.51) \u2014 a small reach edge is noise, and at the lighter and women\u2019s weight classes being longer barely helps. But the effect lives in the <i>size</i> of the gap: at a \u22654\u2033 advantage the longer fighter wins ~<b>56%</b>, at \u22656\u2033 ~<b>59%</b>. A large mismatch is flagged on the matchup above under \u201cwhat the model can\u2019t see,\u201d since the model gives reach little weight precisely because the <i>average</i> effect is tiny.<br>`+
@@ -3879,7 +3896,7 @@ function seedMcard(){
     const ratedA=inA&&ia>=0, ratedB=inB&&ib>=0;
     if(ratedA&&ratedB&&rows[ia][C.div]===rows[ib][C.div]){
       // MODEL tier: rated vs rated, same division — the validated win probability
-      const pa=1/(1+Math.exp(-((rows[ia][C.score]||0)-(rows[ib][C.score]||0))));
+      const pa=WPr(rows[ia],rows[ib]);
       MCARD[key]=Object.assign(base,{ tier:'model', modelPick:(pa>=0.5?bt.r:bt.b), modelP:Math.max(pa,1-pa) });
     } else if(inA&&inB){
       // GRADE-LEAN tier: a prospect or a cross-division pair. Which fighter grades
