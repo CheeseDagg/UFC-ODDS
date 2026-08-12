@@ -487,6 +487,13 @@ header{position:relative}
 .upc-meta{color:var(--muted);font-size:11px;margin-top:3px}
 .upc-odds{font-size:11px;margin-top:4px;color:var(--ink);font-family:"Saira",sans-serif}
 .upc-odds .uo-best{color:var(--muted)}
+/* Deliberately the same muted weight as the market line. A wide gap is tinted,
+   not badged: this page's own ledger says the model loses to the price on
+   disagreements, so the styling must not read as a recommendation. */
+.upc-odds .uo-mdl{color:var(--muted)}
+.upc-odds .uo-mdl.wide{color:var(--gold)}
+.upc-odds .uo-thin{font-size:9.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;opacity:.65}
 .upc-odds .uo-flag{display:inline-block;margin-left:5px;font-size:9.5px;font-weight:700;color:var(--gold);font-family:"Saira Condensed",sans-serif;text-transform:uppercase;letter-spacing:.04em}
 .upc-belt{background:#A9802F;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;letter-spacing:.06em;vertical-align:middle}
 .upc-rust{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--red);background:var(--redsoft);border:1px solid var(--red);border-radius:999px;padding:0 6px;margin-left:5px;vertical-align:middle;cursor:help;white-space:nowrap}
@@ -2400,7 +2407,10 @@ function renderMyBookLines(){
       rows.push({name:s.name,am:best.am,book:best.book,ev:ev,fair:_probToAm(s.sp)});
     });
   }
-  if(!rows.length){ el.innerHTML='<div class="bd-empty">None of your tracked books (FanDuel, DraftKings, BetRivers) are quoting this card yet.</div>'; return; }
+  // Name the book actually selected. This read "(FanDuel, DraftKings,
+  // BetRivers)" -- the same dead list as the panel header -- so an empty panel
+  // told you to go check two books that were never being consulted.
+  if(!rows.length){ el.innerHTML='<div class="bd-empty"><b>'+MY_BOOKS[0]+'</b> is not quoting this card yet. Pick another book above, or check back closer to the fight.</div>'; return; }
   rows.sort((a,b)=>b.ev-a.ev);
   const esc=s=>String(s).replace(/[<>"&]/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;','&':'&amp;'}[c]));
   el.innerHTML=rows.map(r=>{
@@ -2608,8 +2618,46 @@ function marketChip(ra,rb){
   const yb = (bestR==null && bestB==null)
     ? ' <span class="uo-best dim">\u00b7 not quoted at your book</span>'
     : ' <span class="uo-best">\u00b7 yours '+(bestR==null?'\u2014':amF(bestR))+' / '+(bestB==null?'\u2014':amF(bestB))+'</span>';
+  // ---- THE MODEL'S OWN NUMBER, on the card row.
+  // The card listed the market and its flags and never said what the model
+  // thought, so scanning twelve bouts for "where do we differ" meant tapping
+  // into all twelve. It is computed here from the same WP() the compare tab
+  // uses, so the two can never disagree.
+  //
+  // Framed as a DISAGREEMENT, never as an edge. This tool's own forward ledger
+  // says taking the model's side against the price is 0-for-5, and the panel
+  // at the bottom of the page says so in those words. A big gap here means
+  // "these two sources differ", which is a reason to go read the matchup --
+  // not a reason to bet the difference. Anything stronger would be the page
+  // contradicting its own record two screens down.
+  // A GAP ONLY COUNTS AS A DISAGREEMENT WHEN THE MODEL HAS THE DATA TO
+  // DISAGREE WITH. Measured on this card (UFC 330, 8 rated bouts): where both
+  // fighters are high-confidence the mean model-market gap is 10.4pt; where
+  // either is thinner it is 37.7pt -- 3.6x larger. Those big numbers are the
+  // model being under-sampled, not the model finding something: the four
+  // widest gaps on the card all involve a fighter with 5-7 UFC bouts, while
+  // the two closest (2.2pt, 1.3pt) are both 10+ on each side.
+  //
+  // Flagging every 10pt gap therefore lit up 6 of 8 bouts and meant nothing.
+  // The flag now requires BOTH fighters high-confidence, which on this card
+  // marks 2 -- and a thin bout says so plainly instead of dressing a small
+  // sample up as an edge.
+  let mdl='';
+  const iA=refForName(ra), iB=refForName(rb);
+  if(iA!=null && iB!=null && iA>=0 && iB>=0 && typeof rows!=='undefined' && rows[iA] && rows[iB]){
+    const pm=WPr(rows[iA], rows[iB]);
+    if(pm!=null){
+      const gap=Math.abs(pm-consR);
+      const solid=(DATA.conf[rows[iA][C.conf]]==='high' && DATA.conf[rows[iB][C.conf]]==='high');
+      let tail='';
+      if(!solid) tail=' <span class="uo-thin">thin data</span>';
+      else if(gap>=0.10) tail=' ('+Math.round(gap*100)+'pt disagreement)';
+      mdl=' <span class="uo-mdl'+(solid&&gap>=0.10?' wide':'')+'">· model '+
+          Math.round(pm*100)+'%'+tail+'</span>';
+    }
+  }
   return '<div class="upc-odds">'+lr+' '+probToAmerican(consR)+' / '+lb+' '+probToAmerican(1-consR)+
-         yb+flag+'</div>';
+         yb+mdl+flag+'</div>';
 }
 
 

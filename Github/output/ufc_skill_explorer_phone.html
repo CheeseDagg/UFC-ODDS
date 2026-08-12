@@ -501,6 +501,13 @@ header{position:relative}
 .upc-meta{color:var(--muted);font-size:11px;margin-top:3px}
 .upc-odds{font-size:11px;margin-top:4px;color:var(--ink);font-family:"Saira",-apple-system,system-ui,sans-serif}
 .upc-odds .uo-best{color:var(--muted)}
+/* Deliberately the same muted weight as the market line. A wide gap is tinted,
+   not badged: this page's own ledger says the model loses to the price on
+   disagreements, so the styling must not read as a recommendation. */
+.upc-odds .uo-mdl{color:var(--muted)}
+.upc-odds .uo-mdl.wide{color:var(--gold)}
+.upc-odds .uo-thin{font-size:9.5px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.04em;opacity:.65}
 .upc-odds .uo-flag{display:inline-block;margin-left:5px;font-size:9.5px;font-weight:700;color:var(--gold);font-family:"Saira Condensed","Helvetica Neue Condensed","Arial Narrow",system-ui,sans-serif;text-transform:uppercase;letter-spacing:.04em}
 .upc-belt{background:#A9802F;color:#fff;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:700;letter-spacing:.06em;vertical-align:middle}
 .upc-rust{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.02em;color:var(--red);background:var(--redsoft);border:1px solid var(--red);border-radius:999px;padding:0 6px;margin-left:5px;vertical-align:middle;cursor:help;white-space:nowrap}
@@ -564,6 +571,11 @@ header{position:relative}
 .lb-head{padding:16px 18px 12px;background:var(--surface2);border-bottom:1px solid var(--hair)}
 .lb-head h2{margin:0;font-size:17px}
 .lb-head .tag{font-size:11.5px;color:var(--faint)}
+.bookpick{display:inline-flex;align-items:center;gap:7px;margin-top:10px;
+  font-size:12.5px;font-weight:600;color:var(--ink)}
+.bookpick select{font:inherit;padding:5px 8px;border-radius:7px;
+  border:1px solid var(--hair);background:var(--surface);color:var(--ink);
+  max-width:190px}
 .lb-controls{display:flex;flex-wrap:wrap;gap:14px;padding:14px 18px}
 .lb-controls .field{min-width:150px;flex:1}
 .lb-list{padding:4px 0 8px}
@@ -711,6 +723,7 @@ a{color:var(--blue)}
 \1<div id="freshpill" style="display:none;position:sticky;top:0;z-index:99;text-align:center;
 padding:5px 10px;font:600 12.5px system-ui;letter-spacing:.03em"></div>
 <script>
+const BUILT_CARD = "fdc5132e3872";
 fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
   var el=document.getElementById('freshpill'); if(!el) return;
   var h=(Date.now()-new Date(s.odds_asof).getTime())/36e5;
@@ -720,6 +733,30 @@ fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
   el.textContent='Odds updated '+(h<1?'under an hour':Math.round(h)+'h')+' ago · '+(s.event||'')
     +(s.card_src==='auto'?' · card auto-adopted from feed — verify matchups':'');
   el.style.display='';
+}).catch(function(){});
+/* A CACHED PAGE IS INDISTINGUISHABLE FROM A CURRENT ONE, and the pill above
+   cannot tell you: status.json is fetched no-store so the FRESHNESS line
+   updates while the 2.9MB of card baked into this HTML stays whatever the
+   browser had. On 2026-08-12 that shipped a reader a months-old card under a
+   pill that had just been repaired -- the worst possible combination, because
+   the one element that looked authoritative was the one that was lying.
+
+   BUILT_CARD is a fingerprint of the bouts THIS html renders; build.json
+   carries the fingerprint the server last built. Both are produced by the same
+   function, in the same pass, from the same list, so they cannot drift. If
+   they differ, this document predates the current card -- say so and reload
+   through a busted URL, since a plain reload can be served from cache again.
+   Fail-soft: no build.json (offline build, old deploy) means do nothing. */
+fetch('build.json',{cache:'no-store'}).then(r=>r.json()).then(function(b){
+  if(!BUILT_CARD||!b||!b.card||b.card===BUILT_CARD) return;
+  var el=document.getElementById('freshpill');
+  if(el){el.style.background='#3a2b12';el.style.color='#e8b44a';
+    el.textContent='This page is a CACHED COPY of an older card — reloading…';
+    el.style.display='';}
+  if(sessionStorage.getItem('ufcCardBust')!==b.card){
+    sessionStorage.setItem('ufcCardBust',b.card);
+    location.replace(location.pathname+'?v='+encodeURIComponent(b.card));
+  }
 }).catch(function(){});
 </script>
 <div class="wrap">
@@ -882,8 +919,18 @@ fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
   <div class="upcoming" id="upcoming"></div>
   <section class="lb" id="mybooks">
     <div class="lb-head">
-      <h2>Best prices at your books</h2>
-      <span class="tag">Best available number at <b>FanDuel, DraftKings &amp; BetRivers</b> for every side on the card, ranked by edge vs the sharp no-vig line. Beating the sharp number now is where positive closing-line value comes from &mdash; the &ldquo;value&rdquo; rows are where to look. Heads-up: <b>Fanatics, Bet365 and ScoreBet aren&rsquo;t in this feed</b>, so check those by hand. This is a pre-close snapshot, not a pick; shop the best number, then tap <b>log</b> to track your CLV.</span>
+      <h2>Best price at your book</h2>
+      <span class="tag">Every side on the card at <b id="bookNameA">your book</b>, ranked by edge vs the sharp no-vig line. Beating the sharp number now is where positive closing-line value comes from &mdash; the &ldquo;value&rdquo; rows are where to look. Heads-up: <b>Fanatics, Bet365 and ScoreBet aren&rsquo;t in this feed</b>, so check those by hand. This is a pre-close snapshot, not a pick; shop the best number, then tap <b>log</b> to track your CLV.</span>
+      <!-- ONE book, chosen. The legs have to sit on one slip, so a number at
+           another book is not a number you can use -- that invariant is why
+           MY_BOOKS was cut to a single entry. But hardcoding WHICH one makes
+           the whole tab wrong for anyone not on it, and the label here still
+           read "FanDuel, DraftKings & BetRivers" long after the code stopped
+           meaning it, which is worse than useless: it named two books whose
+           prices were never being shown. Pick one; it persists. -->
+      <label class="bookpick">Your book:
+        <select id="bookPick" aria-label="Which sportsbook do you bet at"></select>
+      </label>
     </div>
     <div id="myBookLines" class="mybook-list"></div>
   </section>
@@ -2353,7 +2400,39 @@ function sharpFair1(O){
 // have to sit on ONE slip, so a number at DraftKings is not a number you can use.
 // On the Aug 8 card the panel's single "positive" row was Elkins +525 DraftKings
 // at +0.4%; the same side is +450 at FanDuel, which is -11.7%. One book.
-const MY_BOOKS=['FanDuel'];
+// Still exactly ONE book for the reason above -- but WHICH one is the reader's,
+// not a constant. Two people on two books were reading numbers for a third.
+let MY_BOOKS=['FanDuel'];
+const BOOK_KEY='ufcMyBook';
+function _allBooks(){
+  const s=new Set();
+  try{ for(const k in ODDS){ (ODDS[k].books||[]).forEach(e=>s.add(e[0])); } }catch(e){}
+  return [...s].sort((a,b)=>a.localeCompare(b));
+}
+function _setBook(name,rerender){
+  if(!name) return;
+  MY_BOOKS=[name];
+  try{ localStorage.setItem(BOOK_KEY,name); }catch(e){}
+  ['bookNameA','bookNameB'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.textContent=name; });
+  if(rerender){
+    try{ renderMyBookLines(); }catch(e){}
+    try{ computeParlay(); }catch(e){}
+  }
+}
+function initBookPick(){
+  const sel=document.getElementById('bookPick'); if(!sel) return;
+  const books=_allBooks(); if(!books.length) return;
+  let saved=null;
+  try{ saved=localStorage.getItem(BOOK_KEY); }catch(e){}
+  // A saved book that this card's feed does not price would silently show an
+  // empty panel, so fall back rather than honour it.
+  const pick=(saved&&books.indexOf(saved)>=0)?saved
+            :(books.indexOf('FanDuel')>=0?'FanDuel':books[0]);
+  sel.innerHTML=books.map(b=>'<option value="'+b+'"'+(b===pick?' selected':'')+'>'+b+'</option>').join('');
+  sel.addEventListener('change',()=>_setBook(sel.value,true));
+  _setBook(pick,false);
+}
 function _bestAtMyBooks(books,idx){ // idx: 1 or 2 (American odds for side1/side2)
   let best=null,bk=null;
   for(let i=0;i<books.length;i++){ const e=books[i]; if(MY_BOOKS.indexOf(e[0])<0) continue;
@@ -2373,7 +2452,10 @@ function renderMyBookLines(){
       rows.push({name:s.name,am:best.am,book:best.book,ev:ev,fair:_probToAm(s.sp)});
     });
   }
-  if(!rows.length){ el.innerHTML='<div class="bd-empty">None of your tracked books (FanDuel, DraftKings, BetRivers) are quoting this card yet.</div>'; return; }
+  // Name the book actually selected. This read "(FanDuel, DraftKings,
+  // BetRivers)" -- the same dead list as the panel header -- so an empty panel
+  // told you to go check two books that were never being consulted.
+  if(!rows.length){ el.innerHTML='<div class="bd-empty"><b>'+MY_BOOKS[0]+'</b> is not quoting this card yet. Pick another book above, or check back closer to the fight.</div>'; return; }
   rows.sort((a,b)=>b.ev-a.ev);
   const esc=s=>String(s).replace(/[<>"&]/g,c=>({'<':'&lt;','>':'&gt;','"':'&quot;','&':'&amp;'}[c]));
   el.innerHTML=rows.map(r=>{
@@ -2581,8 +2663,46 @@ function marketChip(ra,rb){
   const yb = (bestR==null && bestB==null)
     ? ' <span class="uo-best dim">\u00b7 not quoted at your book</span>'
     : ' <span class="uo-best">\u00b7 yours '+(bestR==null?'\u2014':amF(bestR))+' / '+(bestB==null?'\u2014':amF(bestB))+'</span>';
+  // ---- THE MODEL'S OWN NUMBER, on the card row.
+  // The card listed the market and its flags and never said what the model
+  // thought, so scanning twelve bouts for "where do we differ" meant tapping
+  // into all twelve. It is computed here from the same WP() the compare tab
+  // uses, so the two can never disagree.
+  //
+  // Framed as a DISAGREEMENT, never as an edge. This tool's own forward ledger
+  // says taking the model's side against the price is 0-for-5, and the panel
+  // at the bottom of the page says so in those words. A big gap here means
+  // "these two sources differ", which is a reason to go read the matchup --
+  // not a reason to bet the difference. Anything stronger would be the page
+  // contradicting its own record two screens down.
+  // A GAP ONLY COUNTS AS A DISAGREEMENT WHEN THE MODEL HAS THE DATA TO
+  // DISAGREE WITH. Measured on this card (UFC 330, 8 rated bouts): where both
+  // fighters are high-confidence the mean model-market gap is 10.4pt; where
+  // either is thinner it is 37.7pt -- 3.6x larger. Those big numbers are the
+  // model being under-sampled, not the model finding something: the four
+  // widest gaps on the card all involve a fighter with 5-7 UFC bouts, while
+  // the two closest (2.2pt, 1.3pt) are both 10+ on each side.
+  //
+  // Flagging every 10pt gap therefore lit up 6 of 8 bouts and meant nothing.
+  // The flag now requires BOTH fighters high-confidence, which on this card
+  // marks 2 -- and a thin bout says so plainly instead of dressing a small
+  // sample up as an edge.
+  let mdl='';
+  const iA=refForName(ra), iB=refForName(rb);
+  if(iA!=null && iB!=null && iA>=0 && iB>=0 && typeof rows!=='undefined' && rows[iA] && rows[iB]){
+    const pm=WPr(rows[iA], rows[iB]);
+    if(pm!=null){
+      const gap=Math.abs(pm-consR);
+      const solid=(DATA.conf[rows[iA][C.conf]]==='high' && DATA.conf[rows[iB][C.conf]]==='high');
+      let tail='';
+      if(!solid) tail=' <span class="uo-thin">thin data</span>';
+      else if(gap>=0.10) tail=' ('+Math.round(gap*100)+'pt disagreement)';
+      mdl=' <span class="uo-mdl'+(solid&&gap>=0.10?' wide':'')+'">· model '+
+          Math.round(pm*100)+'%'+tail+'</span>';
+    }
+  }
   return '<div class="upc-odds">'+lr+' '+probToAmerican(consR)+' / '+lb+' '+probToAmerican(1-consR)+
-         yb+flag+'</div>';
+         yb+mdl+flag+'</div>';
 }
 
 
@@ -4192,6 +4312,9 @@ try{ render(); }catch(e){}
 try{ renderLeaderboard(); }catch(e){}
 try{ renderDivDepth(); }catch(e){}
 try{ renderUpcoming(); }catch(e){}
+// BEFORE the panels render: initBookPick sets MY_BOOKS from the saved choice,
+// and both panels below read it at render time.
+try{ initBookPick(); }catch(e){}
 try{ renderMyBookLines(); }catch(e){}
 try{ const _mb=document.getElementById('myBookLines'); if(_mb) _mb.addEventListener('click',e=>{ const b=e.target.closest('.mb-log'); if(!b) return; logFromLine(b.dataset.n, parseInt(b.dataset.a,10)); }); }catch(e){}
 try{ initParlay(); }catch(e){}
