@@ -29,6 +29,25 @@ def _si(s):
     return STANCE.index(s) if s in STANCE else 0
 
 
+def card_fingerprint(up):
+    """Short, order-independent hash of the bouts a build renders.
+
+    Order-independent on BOTH axes -- the pair is sorted internally and the
+    list is sorted -- so a feed that returns the same card with red/blue
+    swapped, or in a different order, is the same fingerprint. Otherwise every
+    reshuffle would read as a card change and bust every reader's cache for
+    nothing.
+    """
+    if not up or not up.get("bouts"):
+        return ""
+    import hashlib
+    pairs = sorted(
+        "|".join(sorted(((b.get("r") or "").strip().lower(),
+                         (b.get("b") or "").strip().lower())))
+        for b in up["bouts"])
+    return hashlib.sha1("\n".join(pairs).encode()).hexdigest()[:12]
+
+
 def load_upcoming():
     """Read the next card (fighters, weight class, title flag) for the in-tool
     upcoming-card panel. Returns None if unavailable so the panel hides cleanly."""
@@ -450,6 +469,35 @@ def main():
     except Exception:
         _asof = ""
     html = html.replace("__ODDS_ASOF__", json.dumps(_asof))
+
+    # THE CACHE-STALENESS FINGERPRINT. The freshness pill reads status.json
+    # no-store, so it reports the server's clock even when the surrounding
+    # document is a cached copy carrying a different card entirely -- a pill
+    # saying "updated under an hour ago" above months-old matchups. Nothing in
+    # the page could detect that, because nothing in the page knew which card
+    # it was built from.
+    #
+    # This stamps the rendered bouts into the html AND writes the same value to
+    # docs/build.json, from one call, on one list. Deliberately NOT the event
+    # name from status.json: that field is written AFTER build_widget runs (see
+    # refresh_odds.py) and inside a try, so baking it here would bake the
+    # PREVIOUS card's name and mismatch on every real card change.
+    # Fail-soft in both directions: an empty fingerprint makes the page's check
+    # a no-op rather than a false alarm, and a build.json that cannot be written
+    # must never cost the build -- a cache guard is worth strictly less than
+    # publishing at all, which is the thing that was broken for nine days.
+    try:
+        _fp = card_fingerprint(up)
+    except Exception as e:
+        print(f"card fingerprint failed ({type(e).__name__}) — cache guard off this build")
+        _fp = ""
+    html = html.replace("__BUILT_CARD__", json.dumps(_fp))
+    try:
+        _docs = OUT.parent / "docs"
+        if _fp and _docs.is_dir():
+            json.dump({"card": _fp}, open(_docs / "build.json", "w"))
+    except Exception as e:
+        print(f"build.json write failed ({type(e).__name__}) — cache guard off this build")
     (OUT / "ufc_skill_explorer.html").write_text(html)
     up_n = len(up["bouts"]) if up else 0
     print(f"Built ufc_skill_explorer.html ({len(html)//1024} KB, {len(rows)} fighters, {up_n} upcoming bouts, {n_odds} fights priced)")

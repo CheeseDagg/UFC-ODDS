@@ -666,6 +666,7 @@ a{color:var(--blue)}
 \1<div id="freshpill" style="display:none;position:sticky;top:0;z-index:99;text-align:center;
 padding:5px 10px;font:600 12.5px system-ui;letter-spacing:.03em"></div>
 <script>
+const BUILT_CARD = __BUILT_CARD__;
 fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
   var el=document.getElementById('freshpill'); if(!el) return;
   var h=(Date.now()-new Date(s.odds_asof).getTime())/36e5;
@@ -675,6 +676,30 @@ fetch('status.json',{cache:'no-store'}).then(r=>r.json()).then(function(s){
   el.textContent='Odds updated '+(h<1?'under an hour':Math.round(h)+'h')+' ago · '+(s.event||'')
     +(s.card_src==='auto'?' · card auto-adopted from feed — verify matchups':'');
   el.style.display='';
+}).catch(function(){});
+/* A CACHED PAGE IS INDISTINGUISHABLE FROM A CURRENT ONE, and the pill above
+   cannot tell you: status.json is fetched no-store so the FRESHNESS line
+   updates while the 2.9MB of card baked into this HTML stays whatever the
+   browser had. On 2026-08-12 that shipped a reader a months-old card under a
+   pill that had just been repaired -- the worst possible combination, because
+   the one element that looked authoritative was the one that was lying.
+
+   BUILT_CARD is a fingerprint of the bouts THIS html renders; build.json
+   carries the fingerprint the server last built. Both are produced by the same
+   function, in the same pass, from the same list, so they cannot drift. If
+   they differ, this document predates the current card -- say so and reload
+   through a busted URL, since a plain reload can be served from cache again.
+   Fail-soft: no build.json (offline build, old deploy) means do nothing. */
+fetch('build.json',{cache:'no-store'}).then(r=>r.json()).then(function(b){
+  if(!BUILT_CARD||!b||!b.card||b.card===BUILT_CARD) return;
+  var el=document.getElementById('freshpill');
+  if(el){el.style.background='#3a2b12';el.style.color='#e8b44a';
+    el.textContent='This page is a CACHED COPY of an older card — reloading…';
+    el.style.display='';}
+  if(sessionStorage.getItem('ufcCardBust')!==b.card){
+    sessionStorage.setItem('ufcCardBust',b.card);
+    location.replace(location.pathname+'?v='+encodeURIComponent(b.card));
+  }
 }).catch(function(){});
 </script>
 <div class="wrap">
