@@ -3,9 +3,27 @@ name: Publish UFC site
 # this removes the GitHub-datacenter-IP fightodds feed (which serves stale/
 # pre-swap matchups to GH's IP) from the loop entirely. Update the site by
 # committing freshly built docs (built at home from your own feed pull).
+#
+# A `push` TRIGGER ALONE CANNOT SEE THE ODDS REFRESH. The refresh job commits
+# and pushes with the default GITHUB_TOKEN, and GitHub deliberately does not
+# start workflows from GITHUB_TOKEN pushes -- that is the recursion guard, and
+# it is silent: the push succeeds, the commit is on main, and no run appears.
+# So this workflow only ever fired on HUMAN pushes. The last one was 2026-08-03
+# (run #70). Odds refreshed in the repo on 8/11 and 8/12, four times, and not
+# one reached a reader: the site kept serving odds_asof 2026-08-02T00:02, which
+# the freshness pill rendered as "updated 259h ago" while git log looked
+# perfectly healthy. Nine days of a green pipeline publishing nothing.
+#
+# workflow_run fires on the REFRESH RUN COMPLETING, which is not a push event
+# and is not suppressed. Deploying unchanged docs is harmless -- the artifact
+# is idempotent and the render gate still runs -- so this is gated on the
+# upstream run succeeding, not on whether anything was committed.
 on:
   push:
     branches: [ main ]
+  workflow_run:
+    workflows: ["UFC odds auto-refresh", "UFC results update"]
+    types: [completed]
   workflow_dispatch: {}
 permissions:
   contents: read
@@ -17,11 +35,22 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    # A workflow_run firing tells you the upstream job ENDED, not that it
+    # worked. Deploying after a failed refresh would republish whatever was
+    # already committed and stamp it as a fresh publish, which is exactly the
+    # kind of green-but-wrong signal this file was already guilty of.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.conclusion == 'success'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      # workflow_run checks out the DEFAULT BRANCH at its current tip, which is
+      # what we want -- publish main as it stands now, including the commit the
+      # refresh job just pushed.
       - uses: actions/checkout@v4
+        with: { ref: main }
       # This job publishes Github/docs verbatim, so whatever is committed there goes
       # straight to readers with nothing in between. The render harness is the only
       # thing that can tell a hand-committed home build from one that is out of sync
