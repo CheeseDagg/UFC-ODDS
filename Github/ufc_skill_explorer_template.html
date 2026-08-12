@@ -1393,15 +1393,42 @@ async function patchRecentResults(){
   }catch(e){ /* fail-safe: baked data stands */ }
 }
 
+// THE CARD PANEL AND THE PRICES MUST BE THE SAME EVENT.
+// loadUpcoming pulls the bout list from ESPN or a third-party CSV; ODDS and the
+// model come from the pinned build. Nothing ever checked that the two agreed,
+// so whenever those feeds moved on to the next event first, the page listed one
+// card's fighters above another card's prices -- and because the next event is
+// usually a Contender Series or Fight Night card of debutants, almost every
+// bout then rendered "no UFC fight data yet". That reads as the tool being
+// broken when it is really the tool being handed the wrong card.
+//
+// refresh_odds.py already refuses to rebuild when the fetched card does not
+// match the pin. This is the same gate, client-side.
+function _cardMatchesOdds(o){
+  if(typeof ODDS==='undefined' || !ODDS) return true;      // nothing to check against
+  const keys=Object.keys(ODDS); if(!keys.length) return true;
+  const have=new Set(keys), bouts=(o&&o.bouts)||[];
+  if(!bouts.length) return false;
+  let hit=0;
+  bouts.forEach(b=>{ if(have.has([nmO(b.r),nmO(b.b)].sort().join('|'))) hit++; });
+  // Half is deliberately loose: a late scratch or a name the feed spells
+  // differently should not reject an otherwise correct card.
+  return hit >= Math.max(2, Math.ceil(bouts.length*0.5));
+}
 async function loadUpcoming(){
   const emb = DATA.upcoming || null;
   if(!IS_WEB){ if(emb) emb.source="embedded"; return emb; }   // offline file: use snapshot
-  try{ const e=await loadFromESPN(); if(e&&e.bouts.length) return e; }catch(e){}
+  let rejected=false;
+  try{ const e=await loadFromESPN();
+    if(e&&e.bouts.length){ if(_cardMatchesOdds(e)) return e; rejected=true; } }catch(e){}
   try{
     const res=await fetch(UPCOMING_URL,{cache:"no-store"});
-    if(res.ok){ const o=upcomingFromRows(parseCSV(await res.text())); if(o){ o.source="feed"; return o; } }
+    if(res.ok){ const o=upcomingFromRows(parseCSV(await res.text()));
+      if(o){ if(_cardMatchesOdds(o)){ o.source="feed"; return o; } rejected=true; } }
   }catch(e){}
-  if(emb) emb.source="embedded";
+  // Distinguish "fell back because offline" from "fell back because the live
+  // feed was a different event" -- they look identical on screen otherwise.
+  if(emb) emb.source = rejected ? "pinned" : "embedded";
   return emb;
 }
 
@@ -1483,6 +1510,7 @@ async function renderUpcoming(){
   const hasPrelims = !!prelimItems;
   const freshness = u.source==='ESPN' ? 'live from ESPN'
                   : u.source==='feed' ? 'from public odds data (may lag)'
+                  : u.source==='pinned' ? 'the priced card — a live feed offered a different event and was ignored'
                   : 'saved snapshot baked into this file';
   el.innerHTML =
     `<div class="upc-head"><span class="upc-title">Upcoming card</span>`+
