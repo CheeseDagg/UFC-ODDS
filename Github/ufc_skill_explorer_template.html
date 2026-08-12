@@ -550,6 +550,11 @@ header{position:relative}
 .lb-head{padding:16px 18px 12px;background:var(--surface2);border-bottom:1px solid var(--hair)}
 .lb-head h2{margin:0;font-size:17px}
 .lb-head .tag{font-size:11.5px;color:var(--faint)}
+.bookpick{display:inline-flex;align-items:center;gap:7px;margin-top:10px;
+  font-size:12.5px;font-weight:600;color:var(--ink)}
+.bookpick select{font:inherit;padding:5px 8px;border-radius:7px;
+  border:1px solid var(--hair);background:var(--surface);color:var(--ink);
+  max-width:190px}
 .lb-controls{display:flex;flex-wrap:wrap;gap:14px;padding:14px 18px}
 .lb-controls .field{min-width:150px;flex:1}
 .lb-list{padding:4px 0 8px}
@@ -862,8 +867,18 @@ fetch('build.json',{cache:'no-store'}).then(r=>r.json()).then(function(b){
   <div class="upcoming" id="upcoming"></div>
   <section class="lb" id="mybooks">
     <div class="lb-head">
-      <h2>Best prices at your books</h2>
-      <span class="tag">Best available number at <b>FanDuel, DraftKings &amp; BetRivers</b> for every side on the card, ranked by edge vs the sharp no-vig line. Beating the sharp number now is where positive closing-line value comes from &mdash; the &ldquo;value&rdquo; rows are where to look. Heads-up: <b>Fanatics, Bet365 and ScoreBet aren&rsquo;t in this feed</b>, so check those by hand. This is a pre-close snapshot, not a pick; shop the best number, then tap <b>log</b> to track your CLV.</span>
+      <h2>Best price at your book</h2>
+      <span class="tag">Every side on the card at <b id="bookNameA">your book</b>, ranked by edge vs the sharp no-vig line. Beating the sharp number now is where positive closing-line value comes from &mdash; the &ldquo;value&rdquo; rows are where to look. Heads-up: <b>Fanatics, Bet365 and ScoreBet aren&rsquo;t in this feed</b>, so check those by hand. This is a pre-close snapshot, not a pick; shop the best number, then tap <b>log</b> to track your CLV.</span>
+      <!-- ONE book, chosen. The legs have to sit on one slip, so a number at
+           another book is not a number you can use -- that invariant is why
+           MY_BOOKS was cut to a single entry. But hardcoding WHICH one makes
+           the whole tab wrong for anyone not on it, and the label here still
+           read "FanDuel, DraftKings & BetRivers" long after the code stopped
+           meaning it, which is worse than useless: it named two books whose
+           prices were never being shown. Pick one; it persists. -->
+      <label class="bookpick">Your book:
+        <select id="bookPick" aria-label="Which sportsbook do you bet at"></select>
+      </label>
     </div>
     <div id="myBookLines" class="mybook-list"></div>
   </section>
@@ -2333,7 +2348,39 @@ function sharpFair1(O){
 // have to sit on ONE slip, so a number at DraftKings is not a number you can use.
 // On the Aug 8 card the panel's single "positive" row was Elkins +525 DraftKings
 // at +0.4%; the same side is +450 at FanDuel, which is -11.7%. One book.
-const MY_BOOKS=['FanDuel'];
+// Still exactly ONE book for the reason above -- but WHICH one is the reader's,
+// not a constant. Two people on two books were reading numbers for a third.
+let MY_BOOKS=['FanDuel'];
+const BOOK_KEY='ufcMyBook';
+function _allBooks(){
+  const s=new Set();
+  try{ for(const k in ODDS){ (ODDS[k].books||[]).forEach(e=>s.add(e[0])); } }catch(e){}
+  return [...s].sort((a,b)=>a.localeCompare(b));
+}
+function _setBook(name,rerender){
+  if(!name) return;
+  MY_BOOKS=[name];
+  try{ localStorage.setItem(BOOK_KEY,name); }catch(e){}
+  ['bookNameA','bookNameB'].forEach(id=>{
+    const el=document.getElementById(id); if(el) el.textContent=name; });
+  if(rerender){
+    try{ renderMyBookLines(); }catch(e){}
+    try{ computeParlay(); }catch(e){}
+  }
+}
+function initBookPick(){
+  const sel=document.getElementById('bookPick'); if(!sel) return;
+  const books=_allBooks(); if(!books.length) return;
+  let saved=null;
+  try{ saved=localStorage.getItem(BOOK_KEY); }catch(e){}
+  // A saved book that this card's feed does not price would silently show an
+  // empty panel, so fall back rather than honour it.
+  const pick=(saved&&books.indexOf(saved)>=0)?saved
+            :(books.indexOf('FanDuel')>=0?'FanDuel':books[0]);
+  sel.innerHTML=books.map(b=>'<option value="'+b+'"'+(b===pick?' selected':'')+'>'+b+'</option>').join('');
+  sel.addEventListener('change',()=>_setBook(sel.value,true));
+  _setBook(pick,false);
+}
 function _bestAtMyBooks(books,idx){ // idx: 1 or 2 (American odds for side1/side2)
   let best=null,bk=null;
   for(let i=0;i<books.length;i++){ const e=books[i]; if(MY_BOOKS.indexOf(e[0])<0) continue;
@@ -4172,6 +4219,9 @@ try{ render(); }catch(e){}
 try{ renderLeaderboard(); }catch(e){}
 try{ renderDivDepth(); }catch(e){}
 try{ renderUpcoming(); }catch(e){}
+// BEFORE the panels render: initBookPick sets MY_BOOKS from the saved choice,
+// and both panels below read it at render time.
+try{ initBookPick(); }catch(e){}
 try{ renderMyBookLines(); }catch(e){}
 try{ const _mb=document.getElementById('myBookLines'); if(_mb) _mb.addEventListener('click',e=>{ const b=e.target.closest('.mb-log'); if(!b) return; logFromLine(b.dataset.n, parseInt(b.dataset.a,10)); }); }catch(e){}
 try{ initParlay(); }catch(e){}
