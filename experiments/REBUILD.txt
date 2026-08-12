@@ -1,1 +1,2 @@
 rebuild requested 2026-08-03T22:47Z — key/pin just landed, run now instead of waiting for the cron
+2026-08-12 19:26 UTC — verify workflow_run publish chain
