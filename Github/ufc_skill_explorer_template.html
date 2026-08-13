@@ -2200,6 +2200,7 @@ function statCard(i,slot){
     ${sosLine(r)}
     ${controlLine(r)}
     ${trendLine(r)}
+    ${formLine(r)}
     ${cageLine(i)}
     ${legKickLine(r)}
     ${rankedRecLine(r)}
@@ -2847,6 +2848,42 @@ function sensitivityLine(a,b){
 // Recent trajectory from factual results (streaks/records), NOT rating deltas —
 // recent ratings are computed on smaller samples and shrink toward average, which
 // would falsely read every elite fighter as "declining". Streaks are facts.
+// How a fighter's fights END — factual method splits from the same record
+// trendLine reads, because a method prop is priced against exactly this and
+// the panel it feeds is the screen where those props get picked. The split
+// that matters most is asymmetric: HOW THEY LOSE. A fighter whose losses are
+// all decisions beats the other corner's KO/sub props by existing.
+function _meth(m){
+  m=(m||'').toLowerCase();
+  if(m.indexOf('dec')>=0||m.indexOf('pts')>=0) return 'dec';
+  if(m.indexOf('ko')>=0||m.indexOf('tko')>=0||m.indexOf('doctor')>=0) return 'ko';
+  if(m.indexOf('sub')>=0) return 'sub';
+  return null;
+}
+function formLine(r){
+  const h=(r[C.hist]||[]).filter(e=>(e[2]===1||e[2]===0)&&_meth(e[3]));
+  if(h.length<3) return '';
+  const mix=side=>{
+    const f=h.filter(e=>e[2]===side); if(!f.length) return null;
+    const c={dec:0,ko:0,sub:0}; f.forEach(e=>c[_meth(e[3])]++);
+    return {n:f.length,c};
+  };
+  const W=mix(1), L=mix(0);
+  const pct=(k,m)=>Math.round(100*m.c[k]/m.n);
+  let rows='';
+  if(W) rows+=`<div class="cagerow trend-flat" title="Method split of recorded wins — the factual base under any method-of-victory prop on this fighter.">`+
+    `<span class="cage-k">Wins by</span>`+
+    `<span class="cage-v">dec ${pct('dec',W)}% · ko ${pct('ko',W)}% · sub ${pct('sub',W)}% (n=${W.n})</span></div>`;
+  if(L){
+    const fin=L.c.ko+L.c.sub;
+    rows+=`<div class="cagerow ${fin? 'trend-flat':'trend-up'}" title="How recorded losses ended. Never finished = every loss went to a decision — the durability fact that fades the other corner's KO and submission props.">`+
+      `<span class="cage-k">Durability</span>`+
+      `<span class="cage-v">${fin? `finished ${fin}x (ko ${L.c.ko}, sub ${L.c.sub}) in ${L.n} losses` : `NEVER FINISHED — all ${L.n} losses by decision`}</span></div>`;
+  } else {
+    rows+=`<div class="cagerow trend-up" title="No recorded losses in the dataset."><span class="cage-k">Durability</span><span class="cage-v">no recorded losses</span></div>`;
+  }
+  return rows;
+}
 function trendLine(r){
   const h=(r[C.hist]||[]).filter(e=>e[2]===1||e[2]===0);  // wins/losses only (drop draws/NCs)
   if(h.length<3) return '';
@@ -3496,7 +3533,7 @@ function prospCageRow(pr){
   else { txt='Adapts to either cage'; cls='cage-neutral'; why='A balanced style that doesn\u2019t lean strongly on either cage size.'; }
   return `<div class="cagerow ${cls}" title="${why}"><span class="cage-k">Cage fit</span><span class="cage-v">${txt}</span></div>`;
 }
-function pCtxLines(pr){ return sosLine(pr)+controlLine(pr)+trendLine(pr)+prospCageRow(pr)+legKickLine(pr); }
+function pCtxLines(pr){ return sosLine(pr)+controlLine(pr)+trendLine(pr)+formLine(pr)+prospCageRow(pr)+legKickLine(pr); }
 function pWinMethod(fi,color){
   const tw=(fi.ko_wins||0)+(fi.sub_wins||0)+(fi.dec_wins||0);
   if(!tw) return '';
