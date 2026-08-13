@@ -88,9 +88,33 @@ def main():
         status.write_text("blocked"); return
 
     # 4) identical card -> did prices actually move? (adopt always publishes)
+    #
+    # PRICES ARE NOT THE ONLY BUILD INPUT. On 2026-08-13 a template change
+    # (the method-split/durability panel) sat unpublished behind this check:
+    # odds were byte-identical, so the rebuild was skipped and the new panel
+    # could not reach readers until the market happened to move -- the
+    # 259-hours bug mirrored, with the template in the odds' role. So the
+    # decision now hashes the RENDER INPUTS too: a build ships when prices
+    # moved OR when the code that turns prices into the page did.
+    import hashlib as _hl
+    _tpl = _hl.sha256()
+    for _f in ("ufc_skill_explorer_template.html", "build_widget.py",
+               "build_site.py", "make_offline.py"):
+        try:
+            _tpl.update((HERE / _f).read_bytes())
+        except Exception:
+            _tpl.update(b"absent")
+    _tpl = _tpl.hexdigest()[:16]
+    _tpl_path = HERE / "odds" / ".template_hash"
+    _tpl_old = _tpl_path.read_text().strip() if _tpl_path.exists() else ""
     if mode != "adopt" and json.dumps(pinned, sort_keys=True) == json.dumps(live, sort_keys=True):
-        print("card matches, prices unchanged — nothing to publish")
-        status.write_text("nochange"); return
+        if _tpl == _tpl_old:
+            print("card matches, prices unchanged, template unchanged — nothing to publish")
+            status.write_text("nochange"); return
+        print(f"card matches and prices are unchanged, but the RENDER INPUTS "
+              f"changed ({_tpl_old or 'none'} -> {_tpl}) — rebuilding so the "
+              f"template reaches readers without waiting for the market to move")
+    _tpl_path.write_text(_tpl)
 
     # 5) adopt fresh odds (card identical, prices newer) + rebuild site + ledger
     shutil.move(str(live_parsed_path), str(pinned_path))
