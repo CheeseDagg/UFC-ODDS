@@ -38,7 +38,7 @@ jobs:
         working-directory: Github
         run: |
           for m in ufc_grade ufc_gates ufc_temperature ufc_blend_predict ufc_delta_bouts \
-                   ufc_results_update ufc_layage_gate refresh_odds build_site; do
+                   ufc_results_update ufc_layage_gate refresh_odds build_site reconcile; do
             echo "== $m"; python $m.py --selftest || exit 1
           done
       - name: Render-layer gate

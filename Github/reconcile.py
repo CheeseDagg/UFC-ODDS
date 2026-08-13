@@ -12,7 +12,7 @@ debutant, or a surname match whose first names are too different to trust — it
 LEFT UNCHANGED rather than mapped to the wrong person. Showing a fighter as
 unpriceable is acceptable; attaching someone else's record to them is not.
 """
-import json, re, unicodedata, difflib
+import json, re, unicodedata, difflib, datetime
 
 # Hand-verified overrides for cases the heuristic can't reach on its own.
 ALIAS = {
@@ -47,10 +47,12 @@ def load_roster(ratings_path):
     out = []
     for f in d.get("fighters", []):
         out.append({"name": f["name"], "div": f.get("division", ""),
-                    "bouts": f.get("ufc_bouts", 5)})
+                    "bouts": f.get("ufc_bouts", 5),
+                    "last": f.get("last_fight_year")})
     for p in d.get("prospects", []):
         out.append({"name": p["name"], "div": p.get("division", ""),
-                    "bouts": p.get("ufc_bouts", 1)})
+                    "bouts": p.get("ufc_bouts", 1),
+                    "last": p.get("last_fight_year")})
     return out
 
 
@@ -73,20 +75,64 @@ def load_roster(ratings_path):
 # resolutions on record. 0.80 costs 15 points of recall for nothing extra.
 GIVEN_MIN = 0.72
 
+# A name score cannot tell "Carlos Diego Ferreira -> Diego Ferreira" (same man,
+# extra given name) from "Eduardo Henrique da Silva -> Henrique da Silva"
+# (different men, extra given name). On 2026-08-13 the second pair scored 0.9
+# and a flyweight debutant was about to render with a retired light
+# heavyweight's 2016-18 record. What separates the pairs is not the string, it
+# is the person: Diego was active in the division on the ticket, the LHW was
+# nine years gone and seven weight classes away. So metadata gets a veto.
+#
+#   STALE_YEARS: a candidate whose last dataset fight is >6 years old is
+#   refused on fuzzy hits — the same line ufc_blend_predict draws for namesake
+#   slugs ("a Rick Davis who last fought in 2006"). Exact-spelling hits are
+#   exempt: a same-name comeback is likelier than a same-exact-name stranger.
+#
+#   LADDER: refused when the bout's stated weight class and the candidate's
+#   division are 3+ rungs apart, or the women's flags disagree. Real
+#   short-notice jumps span two rungs (McGregor fought welterweight while
+#   listed featherweight), so two is allowed; Flyweight-vs-LHW is seven.
+#   Unknown or catchweight strings skip the check — the guard exists to catch
+#   absurd joins, not to police plausible moves.
+STALE_YEARS = 6
+LADDER = ["strawweight", "flyweight", "bantamweight", "featherweight",
+          "lightweight", "welterweight", "middleweight", "light heavyweight",
+          "heavyweight"]
+
+
+def _rung(div):
+    """(is_womens, ladder_index) or None when the string names no rung."""
+    d = str(div or "").lower().replace("’", "'").strip()
+    w = d.startswith("women")
+    d = re.sub(r"^women'?s\s*", "", d).strip()
+    return (w, LADDER.index(d)) if d in LADDER else None
+
+
+def _rung_ok(wc, div):
+    a, b = _rung(wc), _rung(div)
+    if not a or not b:
+        return True
+    return a[0] == b[0] and abs(a[1] - b[1]) <= 2
+
 
 class Reconciler:
     def __init__(self, roster):
         self.by_norm, self.by_last = {}, {}
-        self.div, self.bouts = {}, {}
+        self.div, self.bouts, self.last = {}, {}, {}
         for r in roster:
             n = r["name"]
             self.by_norm.setdefault(_norm(n), n)
             self.div[n] = r["div"]
             self.bouts[n] = r["bouts"]
+            self.last[n] = r.get("last")
             t = _tokens(n)
             if t:
                 self.by_last.setdefault(t[-1], []).append(n)
         self._lastkeys = list(self.by_last.keys())
+
+    def _fresh(self, cand):
+        ly = self.last.get(cand)
+        return not ly or datetime.date.today().year - ly <= STALE_YEARS
 
     @staticmethod
     def _givens(n):
@@ -144,14 +190,18 @@ class Reconciler:
             return 0.0
         return max(difflib.SequenceMatcher(None, a, b).ratio() for a in fns for b in cfs)
 
-    def match(self, name):
-        """(canonical_name, division) — or (name, None) when no confident match."""
+    def match(self, name, wc=None):
+        """(canonical_name, division) — or (name, None) when no confident match.
+        wc, when the caller knows the bout's weight class, lets a division-
+        impossible candidate be refused (see the guard block above)."""
         k = _norm(name)
         if k in ALIAS:
-            c = ALIAS[k]
+            c = ALIAS[k]                            # hand-verified: no guards
             return c, self.div.get(c)
         if k in self.by_norm:                       # exact (after accent fold)
             c = self.by_norm[k]
+            if not _rung_ok(wc, self.div.get(c)):   # two Bruno Silvas problem
+                return name, None
             return c, self.div.get(c)
         toks = _tokens(name)
         fn = self._givens(name)
@@ -173,9 +223,15 @@ class Reconciler:
         best = max(cands, key=lambda c: (self._fscore(fn, c), self._rawscore(fn, c)))
         if self._fscore(fn, best) < GIVEN_MIN:      # given names too different
             return name, None
+        # The name evidence points at `best`. If that person cannot be in this
+        # cage — years gone, or the wrong end of the weight ladder — the honest
+        # output is UNRESOLVED, not the next-best-scoring stranger. Falling
+        # through to another candidate here is how wrong-person joins happen.
+        if not self._fresh(best) or not _rung_ok(wc, self.div.get(best)):
+            return name, None
         return best, self.div.get(best)
 
-    def match_pref(self, name, slug=""):
+    def match_pref(self, name, slug="", wc=None):
         """Prefer the fightodds.io SLUG for matching. Slugs carry a permanent numeric id
         and stay constant even when the feed flips a fighter's display-name spelling
         between pulls, so matching on the slug makes a fighter resolve the SAME way every
@@ -211,8 +267,8 @@ class Reconciler:
         both -> same person, ordinary spelling drift ('dennis-buzukia-29076' for
         'Dennis Buzukja'), keep the display spelling. Otherwise take the slug."""
         sn = _name_from_slug(slug)
-        slug_c, slug_d = self.match(sn) if sn else (name, None)
-        name_c, name_d = self.match(name)
+        slug_c, slug_d = self.match(sn, wc) if sn else (name, None)
+        name_c, name_d = self.match(name, wc)
         if slug_d is not None:
             if name_d is not None and name_c != slug_c and _same_person(name, sn):
                 # Both resolve, they disagree, yet the two strings ARE the same
@@ -276,8 +332,8 @@ def reconcile_odds(odds, rec, keyfn):
     out, report = {}, []
     for o in odds.values():
         f1b, f2b = o["f1"], o["f2"]
-        f1, d1 = rec.match_pref(f1b, o.get("f1_slug", ""))
-        f2, d2 = rec.match_pref(f2b, o.get("f2_slug", ""))
+        f1, d1 = rec.match_pref(f1b, o.get("f1_slug", ""), wc=o.get("wc"))
+        f2, d2 = rec.match_pref(f2b, o.get("f2_slug", ""), wc=o.get("wc"))
         o = dict(o)
         o["f1"], o["f2"] = f1, f2
         out["|".join(sorted([keyfn(f1), keyfn(f2)]))] = o
@@ -291,8 +347,8 @@ def reconcile_card(rows, rec):
     the fighters' divisions (agree -> use it; disagree -> the more-established
     fighter's division; if neither maps -> left blank)."""
     for row in rows:
-        r1, d1 = rec.match_pref(row["r"], row.get("r_slug", ""))
-        r2, d2 = rec.match_pref(row["b"], row.get("b_slug", ""))
+        r1, d1 = rec.match_pref(row["r"], row.get("r_slug", ""), wc=row.get("wc"))
+        r2, d2 = rec.match_pref(row["b"], row.get("b_slug", ""), wc=row.get("wc"))
         row["r"], row["b"] = r1, r2
         if not row.get("wc"):
             if d1 and d2 and d1 == d2:
@@ -303,3 +359,63 @@ def reconcile_card(rows, rec):
                 else:
                     row["wc"] = d1 or d2
     return rows
+
+
+def selftest():
+    """Pins on the REAL roster file — every case below happened on a live card."""
+    import os
+    ok = [0, 0]
+    def chk(c, m):
+        ok[1] += 1; ok[0] += bool(c)
+        print(f"{'PASS' if c else 'FAIL'}  {m}")
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    rec = Reconciler(load_roster(os.path.join(here, "output", "ufc_ratings.json")))
+
+    got = rec.match("Eduardo Henrique da Silva", wc="Flyweight")
+    chk(got == ("Eduardo Henrique da Silva", None),
+        "2026-08-13, UFC 330: the flyweight late-replacement does NOT join the "
+        "dataset's Henrique da Silva (LHW, last fight 2017) -- he renders "
+        f"unpriceable instead of wearing a stranger's record (got {got})")
+    got = rec.match("Eduardo Henrique da Silva")
+    chk(got[1] is None,
+        "with no weight class stated, staleness alone still refuses the join "
+        "-- nine years gone is not a spelling variant")
+    got = rec.match_pref("Eduardo Henrique da Silva",
+                         "eduardo-henrique-da-silva-99999", wc="Flyweight")
+    chk(got == ("Eduardo Henrique da Silva", None),
+        "the guard holds on the real call path (match_pref with a slug)")
+
+    got = rec.match("Carlos Diego Ferreira", wc="Lightweight")
+    chk(got[0] == "Diego Ferreira",
+        "the middle-token rescue SURVIVES the guards: Carlos Diego Ferreira "
+        "still resolves to Diego Ferreira (active, right division)")
+    got = rec.match("Ian Garry", wc="Welterweight")
+    chk(got[0] == "Ian Machado Garry",
+        "Ian Garry still resolves to Ian Machado Garry -- the live card's "
+        "other real reconciliation keeps working")
+    got = rec.match("Islam Makhachev", wc="Welterweight")
+    chk(got[0] == "Islam Makhachev",
+        "an exact-spelling hit with a sane weight class passes untouched")
+
+    chk(not _rung_ok("Flyweight", "Light Heavyweight"),
+        "seven rungs apart is refused")
+    chk(_rung_ok("Featherweight", "Welterweight"),
+        "two rungs is allowed -- McGregor fought WW while listed FW; the "
+        "guard catches absurd joins, not real short-notice moves")
+    chk(not _rung_ok("Women's Flyweight", "Flyweight"),
+        "the women's flag must agree even when the rung matches")
+    chk(_rung_ok("Catchweight", "Lightweight") and _rung_ok(None, "Lightweight"),
+        "unknown weight-class strings skip the check rather than guess")
+
+    chk(not rec._fresh("Henrique da Silva"),
+        "the 2017 LHW is stale by the same >6y line ufc_blend_predict draws")
+    chk(rec._fresh("Diego Ferreira"),
+        "a 2025 fighter is fresh")
+    print(f"\n{ok[0]}/{ok[1]} checks pass")
+    return 0 if ok[0] == ok[1] else 1
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(selftest())
