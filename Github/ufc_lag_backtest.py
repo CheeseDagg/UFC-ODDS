@@ -291,3 +291,86 @@ def selftest():
 
 if __name__ == '__main__':
     sys.exit(selftest() if '--selftest' in sys.argv else main())
+
+
+# ---------------------------------------------------------------------------
+# the correction: derived inside train, judged once on the untouched tail
+# ---------------------------------------------------------------------------
+
+def _logit(p):
+    p = min(max(p, 1e-6), 1 - 1e-6)
+    return math.log(p / (1 - p))
+
+
+def _adj_of(n, r5, a_sw, b_long):
+    """Per-side logit adjustment: +a for a short-winning side, -b for a
+    16+-fight side. Composed per fight as adj(A) - adj(B)."""
+    z = 0.0
+    if cell(n, r5) == 'short-winning':
+        z += a_sw
+    if bucket(n) == 'long':
+        z -= b_long
+    return z
+
+
+def _apply(p, r, a_sw, b_long):
+    z = _logit(p) + _adj_of(r['nA'], r['r5A'], a_sw, b_long) \
+        - _adj_of(r['nB'], r['r5B'], a_sw, b_long)
+    return 1.0 / (1.0 + math.exp(-max(min(z, 35), -35)))
+
+
+def derive_and_verify(rows, fit_frac=FIT_FRAC, iters=3000):
+    """(a_sw, b_long, report). The grid search sees ONLY the calibration
+    fifth of train; the tail judges frozen numbers exactly once."""
+    cut = int(len(rows) * fit_frac)
+    train, tail = rows[:cut], rows[cut:]
+    inner = int(len(train) * 0.8)
+    fitA, calB = train[:inner], train[inner:]
+
+    pred_inner = B.fit_mirror_logistic([r['x'] for r in fitA],
+                                       [r['y'] for r in fitA], iters=iters)
+    grid = [i * 0.05 for i in range(0, 13)]           # 0.00 .. 0.60 logits
+    best, best_ll = (0.0, 0.0), None
+    for a in grid:
+        for b in grid:
+            ll = 0.0
+            for r in calB:
+                p = _apply(pred_inner(r['x']), r, a, b)
+                ll -= r['y'] * math.log(max(p, 1e-9)) \
+                    + (1 - r['y']) * math.log(max(1 - p, 1e-9))
+            if best_ll is None or ll < best_ll:
+                best_ll, best = ll, (a, b)
+    a_sw, b_long = best
+
+    # judgment day: production fit on ALL of train, frozen (a,b), tail once
+    pred = B.fit_mirror_logistic([r['x'] for r in train],
+                                 [r['y'] for r in train], iters=iters)
+    def collect(adjust):
+        sides = {name: [] for name, _, _ in BUCKETS}
+        cells = {'short-winning': [], 'long-declining': []}
+        br = 0.0
+        for r in tail:
+            p = pred(r['x'])
+            if adjust:
+                p = _apply(p, r, a_sw, b_long)
+            br += (p - r['y']) ** 2
+            sides[bucket(r['nA'])].append((p, r['y']))
+            sides[bucket(r['nB'])].append((1 - p, 1 - r['y']))
+            cA, cB = cell(r['nA'], r['r5A']), cell(r['nB'], r['r5B'])
+            if cA:
+                cells[cA].append((p, r['y']))
+            if cB:
+                cells[cB].append((1 - p, 1 - r['y']))
+        return sides, cells, br / len(tail)
+    s0, c0, br0 = collect(False)
+    s1, c1, br1 = collect(True)
+    rep = [f"derived on train's last fifth: a_sw=+{a_sw:.2f} b_long=-{b_long:.2f} logits",
+           f"tail Brier: raw {br0:.4f} -> corrected {br1:.4f} "
+           f"({'IMPROVES' if br1 < br0 else 'DOES NOT IMPROVE'})",
+           "tail cells, raw then corrected:"]
+    for name, groups in (('raw', (s0, c0)), ('corrected', (s1, c1))):
+        lines, _ = table(*groups)
+        rep.append(f"  [{name}]")
+        rep += ['  ' + l for l in lines]
+    ships = br1 < br0
+    return a_sw, b_long, ships, '\n'.join(rep)

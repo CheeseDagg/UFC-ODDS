@@ -129,7 +129,7 @@ def _f(row, k):
 # ---------------------------------------------------------------------------
 
 class FighterState:
-    __slots__ = ("elo", "n", "last", "ema", "ko_losses")
+    __slots__ = ("elo", "n", "last", "ema", "ko_losses", "wins5")
 
     def __init__(self):
         self.elo = ELO_BASE
@@ -138,6 +138,7 @@ class FighterState:
         self.ema = {"strike": None, "grap": None, "ctrl": None,
                     "won": None, "sub": None}
         self.ko_losses = 0
+        self.wins5 = []                    # last five results, oldest first
 
 
 def _fight_vals(row):
@@ -194,6 +195,7 @@ def _update_state(st, row, fight_date):
                                                  (1.0 - EMA_ALPHA) * st.ema[k])
     st.n += 1
     st.last = fight_date
+    st.wins5 = (st.wins5 + [int(_f(row, "won"))])[-5:]
     if _f(row, "lost_by_ko") >= 1.0:
         st.ko_losses += 1
 
@@ -456,6 +458,27 @@ def resolve_bout_name(display, slug, keys):
     return hits.pop() if len(hits) == 1 else None
 
 
+# CAREER-LAG CORRECTION (ufc_lag_backtest, 2026-08-14). Out of sample the
+# model underrated 3-8-fight sides arriving on wins: +5.7 points on 733
+# judged sides. The +0.25-logit term below was DERIVED on 2021-2023 fights
+# and VERIFIED on untouched 2023-2026: the flag cleared (+6.6 -> +1.8,
+# inside band) and Brier improved 0.2322 -> 0.2306. The matching veteran
+# term refused to derive (2021-23 signal too weak) -- 16+ fight sides
+# remain overrated by ~-6 and that stays an OPEN item, not a guessed
+# constant. An era note for the future: 2018-2021 was FLAT; this lag is a
+# modern-roster phenomenon and the constant should be re-derived when the
+# next two seasons of results exist.
+CAREER_LAG_A = 0.25
+
+
+def career_lag_adj(st):
+    """+0.25 logits for a 3-8-fight side arriving on wins (last-5 >= 70%).
+    Exactly the condition the constant was validated on -- no proxies."""
+    if 3 <= st.n <= 8 and st.wins5 and sum(st.wins5) / len(st.wins5) >= 0.7:
+        return CAREER_LAG_A
+    return 0.0
+
+
 def predict_card(state, pred_a, pred_b, dobs, values, cdate):
     """-> (bouts for log_card, per-bout detail incl. which model fired)."""
     keys = {ufc_grade.norm(name): name for name in state}
@@ -492,10 +515,14 @@ def predict_card(state, pred_a, pred_b, dobs, values, cdate):
         else:
             model = "B"
             p1 = pred_b(x)
+        adj = career_lag_adj(state[n1]) - career_lag_adj(state[n2])
+        if adj:
+            z = math.log(max(p1, 1e-6) / max(1 - p1, 1e-6)) + adj
+            p1 = 1.0 / (1.0 + math.exp(-max(min(z, 35.0), -35.0)))
         bouts.append({"f1": v["f1"], "f2": v["f2"], "p1": p1,
                       "q1": v.get("cons1")})
         details.append({"f1": v["f1"], "f2": v["f2"], "p1": p1,
-                        "model": model})
+                        "model": model, "lag_adj": adj})
     return bouts, details
 
 
@@ -844,9 +871,27 @@ def selftest():
     assert predict_card(_st, None, _pb, dobs, bad, card_date)[1] == [], \
         "slug-mismatched bout was priced instead of skipped"
 
+    # ---- career-lag correction: the constant and its exact condition ----
+    assert CAREER_LAG_A == 0.25, \
+        "the lag constant is +0.25 logits, derived 2021-23 / verified 2023-26; " \
+        "changing it means re-running ufc_lag_backtest's derive_and_verify"
+    _r = FighterState(); _r.n = 5; _r.wins5 = [1, 1, 1, 1, 0]
+    assert career_lag_adj(_r) == 0.25, "a 4-1 five-fight riser gets the term"
+    _r.n = 20
+    assert career_lag_adj(_r) == 0.0, "a 20-fight veteran never gets it"
+    _r.n = 5; _r.wins5 = [1, 0, 0, 1, 0]
+    assert career_lag_adj(_r) == 0.0, "2-3 in the last five is not 'winning'"
+    _r.n = 5; _r.wins5 = []
+    assert career_lag_adj(_r) == 0.0, "no recorded results -> no adjustment"
+    _s = FighterState()
+    _update_state(_s, {"secs": 900, "sig_l": 0, "sig_l_opp": 0, "td_l": 0,
+                       "td_l_opp": 0, "ctrl": 0, "won": 1, "sub": 0,
+                       "lost_by_ko": 0, "stats_known": "1"}, dt.date(2026, 1, 1))
+    assert _s.wins5 == [1], "state tracks the last-5 results the term reads"
+
     print("UFC BLEND A/B SELFTEST PASS — state+EMA+Elo build, results_delta "
           "bridge, A/B routing, mirror symmetry, idempotent log, settle, "
-          "panel, prod untouched")
+          "panel, prod untouched, career-lag term pinned")
     return 0
 
 
