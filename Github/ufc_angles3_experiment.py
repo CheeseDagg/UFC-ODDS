@@ -129,6 +129,15 @@ def walk_features(bouts, ages=None):
     updates any accumulator, so no row can see its own outcome."""
     ages = ages or {}
     elo = defaultdict(lambda: INIT)
+    # SOS: the Elo of every opponent faced, snapshotted at the moment of that
+    # fight. Ryan 8/14 on Orolbai-Wells: "orolbai has had a much harder
+    # schedule and has been more active", and the blend had NO opponent-
+    # quality term at all -- Elo credits BEATING a good fighter but nothing
+    # in the model knows that a 6-0 record was built against contenders
+    # rather than debutants. Recorded at the time of the bout, never
+    # backfilled from what the opponent later became, which would be the
+    # cheapest possible leak.
+    opp_elos = defaultdict(list)
     ko_losses, ko_wins, wins = defaultdict(int), defaultdict(int), defaultdict(int)
     secs_fought, strikes_landed = defaultdict(float), defaultdict(float)
     last_date, recent = {}, defaultdict(deque)
@@ -157,6 +166,19 @@ def walk_features(bouts, ages=None):
         if prev is None:
             return None
         return min(_days(prev, date) / 365.25, LAY_CAP)
+
+    def sos(f):
+        """Mean Elo of every opponent faced so far, league mean if none."""
+        q = opp_elos[f]
+        return sum(q) / len(q) if q else INIT
+
+    def sos5(f):
+        """Same, over the LAST FIVE opponents only. A man who fought
+        contenders four years ago and cans since has a fine career SoS and a
+        soft recent one, and the recent one is what the next fight looks
+        like. Tested as its own angle rather than assumed better."""
+        q = opp_elos[f][-5:]
+        return sum(q) / len(q) if q else INIT
 
     def activity(f, date):
         q = recent[f]
@@ -197,9 +219,19 @@ def walk_features(bouts, ages=None):
             "layage_d": layage_d,
             "pace_d": pace(a) - pace(b),
             "activ_d": activity(a, date) - activity(b, date),
+            # divided by SCALE so one unit is one Elo scale-length, which
+            # puts the coefficient on the same footing as every other angle
+            # here instead of needing a grid three orders of magnitude finer.
+            "sos_d": (sos(a) - sos(b)) / SCALE,
+            "sos5_d": (sos5(a) - sos5(b)) / SCALE,
         }))
 
         # ---- updates AFTER the snapshot: this line is the leak boundary ----
+        # capture BEFORE the Elo update, or each man's schedule would be
+        # scored against what the fight itself did to his opponent
+        pre_a, pre_b = elo[a], elo[b]
+        opp_elos[a].append(pre_b)
+        opp_elos[b].append(pre_a)
         ea = 1.0 / (1.0 + 10 ** (-(elo[a] - elo[b]) / SCALE))
         sa = bt["won_a"]
         elo[a] += K * (sa - ea)
@@ -220,7 +252,8 @@ def walk_features(bouts, ages=None):
 
 
 CLIP = {"chin_d": 6.0, "age_d": 15.0, "lay_d": LAY_CAP, "kopow_d": 1.0,
-        "layage_d": 4.0, "pace_d": 8.0, "activ_d": 4.0}
+        "layage_d": 4.0, "pace_d": 8.0, "activ_d": 4.0,
+        "sos_d": 1.0, "sos5_d": 1.0}
 
 
 def ll(feats, co, d0, d1, extra=None, ys=None):
@@ -295,6 +328,10 @@ ANGLES = [
      (-0.20, -0.10, -0.05, 0.05, 0.10, 0.20, 0.35)),
     ("ACTIV   bouts last 365d", "activ_d",
      (-0.30, -0.18, -0.10, -0.05, 0.05, 0.10, 0.18, 0.30)),
+    ("SOS     mean opp Elo faced", "sos_d",
+     (-2.0, -1.2, -0.6, -0.3, 0.3, 0.6, 1.2, 2.0, 3.0)),
+    ("SOS5    mean opp Elo, last 5", "sos5_d",
+     (-2.0, -1.2, -0.6, -0.3, 0.3, 0.6, 1.2, 2.0, 3.0)),
 ]
 
 
@@ -382,6 +419,57 @@ def probe(feats, key, grid, b_true, seeds=(7, 17, 27)):
     o, fi, rb = zip(*[probe_once(feats, key, grid, b_true, s) for s in seeds])
     return (sum(o) / len(o), sum(fi) / len(fi), min(o), max(o),
             sum(rb), len(rb))
+
+
+def placebo(feats, key, grid, co, base_tr, base_h, n=24, seed0=1000):
+    """How often does a SHUFFLED column fire the same ship rule?
+
+    The power ceiling asks "could this panel see an effect of this size".
+    This asks the other question, and it is the one that killed both
+    schedule angles on 2026-08-14: "does a column with the signal REMOVED
+    do just as well". Same tune, same holdout, same three periods -- only
+    the feature values are permuted across bouts, so every distributional
+    property survives and only the pairing with the outcome is destroyed.
+
+    THE VERDICTS, age-complete subset (n=8,439), recorded so neither gets
+    re-proposed on the strength of one card:
+
+      ACTIV  bouts last 365d  real +0.00063, 3/3 -> but the BEST of 24
+             placebos scored +0.00117, nearly double the real gain, and
+             2/24 fired the full ship rule. REFUSED.
+      SOS    mean opp Elo     real +0.00056, 3/3 -> best placebo +0.00051.
+             The real column beats a shuffled one by five parts in a
+             hundred thousand. 1/24 placebos fired the rule. REFUSED.
+      SOS5   last-5 opp Elo   NULL before it got this far (0/3 periods,
+             holdout -0.00129).
+
+    Both angles came from a real observation -- Ryan on Orolbai-Wells 8/14,
+    schedule +20.7 percentile and 4 fights in 24 months against 1, Wells
+    287 days idle -- and both facts are TRUE of that bout. They just do not
+    generalize into a model term. The likely reason is not mysterious: Elo
+    already pays for beating good fighters, so opponent quality is mostly
+    priced before this term sees it. Report the facts on the card; do not
+    put them in the blend."""
+    def verdict(rows):
+        tr, B = tune(rows, co, key, grid)
+        hv, _ = ll(rows, co, PERIODS[0][0], PERIODS[-1][1], extra=(key, B))
+        wins = 0
+        for p0, p1 in PERIODS:
+            b0, _ = ll(rows, co, p0, p1)
+            v0, _ = ll(rows, co, p0, p1, extra=(key, B))
+            wins += 1 if v0 > b0 else 0
+        return (tr > base_tr and hv > base_h and wins == 3), hv - base_h
+    import random
+    fired, gains = 0, []
+    for s in range(n):
+        rng = random.Random(seed0 + s)
+        vals = [f[key] for _, f in feats]
+        rng.shuffle(vals)
+        sh = [(bt, dict(f, **{key: v})) for (bt, f), v in zip(feats, vals)]
+        ok, g = verdict(sh)
+        fired += ok
+        gains.append(g)
+    return fired, n, max(gains)
 
 
 def experiment(feats, out=print, ceilings=True):
