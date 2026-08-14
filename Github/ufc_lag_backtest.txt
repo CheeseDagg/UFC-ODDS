@@ -1,0 +1,11 @@
+career-length calibration replay -- 8686 fights, fit on first 6080, judged on last 2606 (out of sample)
+model: the production no-age design (Elo core), fit by the production fitter
+  -- the UFC 330 cells --
+  short-winning   n=733   predicted  55.5%  actual  61.1%  bias  +5.7 (band ±3.5)  << model UNDERRATES
+  long-declining  n=255   predicted  43.1%  actual  41.2%  bias  -1.9 (band ±6.0)
+  -- plain length buckets --
+  short           n=2973  predicted  50.4%  actual  51.2%  bias  +0.8 (band ±1.8)
+  mid             n=1642  predicted  50.2%  actual  50.5%  bias  +0.3 (band ±2.4)
+  long            n=597   predicted  47.2%  actual  42.4%  bias  -4.8 (band ±4.0)  << model OVERRATES
+
+VERDICT: UFC-330 SHAPE CONFIRMED
