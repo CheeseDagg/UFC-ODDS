@@ -1,7 +1,7 @@
 {
  "n": 11,
- "voids": 13,
- "events": 6,
+ "voids": 18,
+ "events": 7,
  "acc": 36.4,
  "brier": 0.2801,
  "market": {
