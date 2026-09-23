@@ -1,9 +1,9 @@
 {
- "generated": "2026-09-16T01:11:34+00:00",
+ "generated": "2026-09-23T15:22:29+00:00",
  "production": {
   "n": 11,
-  "voids": 20,
-  "events": 8,
+  "voids": 22,
+  "events": 9,
   "acc": 36.4,
   "brier": 0.2801,
   "market": {
@@ -17,8 +17,8 @@
  },
  "blend": {
   "n": 5,
-  "voids": 40,
-  "events": 6,
+  "voids": 48,
+  "events": 7,
   "acc": 80.0,
   "brier": 0.1862,
   "market": {
@@ -30,6 +30,6 @@
    "disagree_market_right": null
   }
  },
- "n_logged_now": 0,
+ "n_logged_now": 8,
  "note": "same bouts, same grading; head-to-head of production p1 vs research blend"
 }
