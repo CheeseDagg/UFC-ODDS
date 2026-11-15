@@ -1,5 +1,5 @@
 {
- "generated": "2026-11-15T02:28:41+00:00",
+ "generated": "2026-11-15T17:38:01+00:00",
  "production": {
   "n": 11,
   "voids": 56,
@@ -30,6 +30,6 @@
    "disagree_market_right": null
   }
  },
- "n_logged_now": 10,
+ "n_logged_now": 0,
  "note": "same bouts, same grading; head-to-head of production p1 vs research blend"
 }
